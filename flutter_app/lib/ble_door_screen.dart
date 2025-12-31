@@ -1,10 +1,12 @@
 // to support StreamSubscription (subscribe with the result of scans)
 import 'dart:async';
-//Convert text to bytes. we are using utf8.encode and utf8.decode.
+// Convert text to bytes. we are using utf8.encode and utf8.decode.
 import 'dart:convert';
+import 'dart:typed_data';
+import 'package:crypto/crypto.dart';
 
 import 'package:flutter/material.dart';
-//BLE core library:scan/connect/discover services/read-write characteristics.
+// BLE core library: scan/connect/discover services/read-write characteristics.
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter/services.dart';
@@ -18,10 +20,20 @@ class BLEDoorScreen extends StatefulWidget {
 
 class _BLEDoorScreenState extends State<BLEDoorScreen>
     with SingleTickerProviderStateMixin {
-    //SingleTickerProviderStateMixin is required to make AnimationController (pulse).
-  //  Colors
+  // SingleTickerProviderStateMixin is required to make AnimationController (pulse).
+
+  // ================= SECURITY =================
+  // Shared secret:
+  // It is NOT sent.
+  // It is stored in the application and ESP32 only.
+  static const String sharedSecret = "SUPER_SECRET_KEY";
+
+  // Nonce received from ESP32 (challenge)
+  String? currentNonce;
+
+  // ================= UI COLORS =================
   static const Color primaryBlue = Color(0xFF2563EB);
-  static const Color appBarBlue = Color(0xFF9CB6D8); 
+  static const Color appBarBlue = Color(0xFF9CB6D8);
   static const Color surfaceWhite = Color(0xFFFFFFFF);
   static const Color scaffoldBg = Color(0xFFF8FAFC);
   static const Color successGreen = Color(0xFF059669);
@@ -32,36 +44,36 @@ class _BLEDoorScreenState extends State<BLEDoorScreen>
   static const Color darkGray = Color(0xFF1F2937);
 
   BluetoothDevice? device; // the device I want to connect with
-  BluetoothCharacteristic? rxChar;// to write the PIN
-  BluetoothCharacteristic? txChar;//TO receive(notify) from ESP32
+  BluetoothCharacteristic? rxChar; // to write the HMAC
+  BluetoothCharacteristic? txChar; // TO receive(notify) from ESP32
 
   final TextEditingController pinController = TextEditingController();
 
-  //Subscribe to scan results; so you can stop and cancel it with dispose.
+  // Subscribe to scan results; so you can stop and cancel it with dispose.
   StreamSubscription<List<ScanResult>>? _scanSub;
 
   String status = "Ready to connect";
   bool _isConnecting = false;
   bool doorOpened = false;
   bool _isPinObscured = true; // the PIN hidden or visible
-  bool _isPinValid = false;//Is the PIN length 4 digits? (Only to activate the UNLOCK button if correct)
+  bool _isPinValid = false; // Is the PIN length 4 digits?
 
-//Controller to create a pulsing effect (slight zoom in/out during the call).
+  // Controller to create a pulsing effect (slight zoom in/out during the call).
   late final AnimationController _pulseController;
 
   @override
   void initState() {
-    super.initState();//it is executed the first time the page is built.
+    super.initState(); // it is executed the first time the page is built.
 
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1200),
     );
 
-    //Everything the user types/erases, we calculate if the length is 4.
+    // Everything the user types/erases, we calculate if the length is 4.
     pinController.addListener(() {
       final valid = pinController.text.trim().length == 4;
-      //If the PIN validity status changes, we use setState to update the UNLOCK button.
+      // If the PIN validity status changes, we use setState to update the UNLOCK button.
       if (valid != _isPinValid) {
         setState(() => _isPinValid = valid);
       }
@@ -74,44 +86,36 @@ class _BLEDoorScreenState extends State<BLEDoorScreen>
     await Permission.bluetoothConnect.request();
     await Permission.location.request();
 
-    //Wait until the Bluetooth status turns ON.
-    //first means when condition is met for the first time.
+    // Wait until the Bluetooth status turns ON.
     await FlutterBluePlus.adapterState
         .where((s) => s == BluetoothAdapterState.on)
         .first;
   }
 
   // ---------------- Scan & Connect ----------------
-  //Interface update: We started preparing Bluetooth 
-  // We are in connection mode + We return the door closed.
   Future<void> scanAndConnect() async {
     setState(() {
       status = "Preparing Bluetooth...";
       _isConnecting = true;
       doorOpened = false;
+      currentNonce = null;
     });
 
-     //The effect of the pulse begins
+    // The effect of the pulse begins
     _pulseController.repeat(reverse: true);
 
     await _ensurePermissions();
 
-    //Guarantee that no previous scan is working + cancellation of any previous subscription.
+    // Guarantee that no previous scan is working + cancellation of any previous subscription.
     await FlutterBluePlus.stopScan();
     await _scanSub?.cancel();
 
     setState(() => status = "Scanning for GarageDoorESP...");
 
-
-     //Every time a set of results appears, it searches through them.
-    //If the ad name (advName) = GarageDoorESP → it was found.
+    // Every time a set of results appears, it searches through them.
     _scanSub = FlutterBluePlus.onScanResults.listen((results) async {
       for (final r in results) {
         if (r.advertisementData.advName == "GarageDoorESP") {
-          //Stops scan
-          // Updates status
-          // Connects to device
-          // Breaks the loop
           await FlutterBluePlus.stopScan();
           setState(() => status = "Device found. Connecting...");
           await connectToDevice(r.device);
@@ -119,7 +123,7 @@ class _BLEDoorScreenState extends State<BLEDoorScreen>
         }
       }
     });
-    //automatic cancellation of the subscription when the scan is finished (cleaning).
+
     FlutterBluePlus.cancelWhenScanComplete(_scanSub!);
 
     await FlutterBluePlus.startScan(
@@ -151,33 +155,38 @@ class _BLEDoorScreenState extends State<BLEDoorScreen>
 
     for (final s in services) {
       for (final c in s.characteristics) {
-        //If the characteristic supports write, store it as rxChar (to send a PIN).
+        // If the characteristic supports write, store it as rxChar.
         if (c.properties.write) rxChar = c;
-        //If it supports notify, store it as txChar and enable notifications.
+
+        // If it supports notify, store it as txChar and enable notifications.
         if (c.properties.notify) {
           txChar = c;
           await txChar!.setNotifyValue(true);
-          txChar!.lastValueStream.listen((value) {
-            //We listen for any incoming bytes.
-            //sWe decode the UTF-8 text, remove the spaces, and make it uppercase.
-            final msg = utf8.decode(value).trim().toUpperCase();
 
-            //We display the last message from the ESP32 in the status.
-            //If the message is "OK" → we consider the door to be open.
+          txChar!.lastValueStream.listen((value) {
+            // We listen for any incoming bytes.
+            final msg = utf8.decode(value).trim();
+
+            // First notify received is the NONCE (challenge)
+            if (currentNonce == null) {
+              currentNonce = msg;
+              setState(() => status = "Nonce received. Enter PIN.");
+              return;
+            }
+
+            // Otherwise, it is the authentication result (OK / WRONG)
             setState(() {
               status = "ESP32: $msg";
-              doorOpened = msg == "OK";
+              doorOpened = msg.toUpperCase() == "OK";
             });
           });
         }
       }
     }
-    //If write + notify is found → Ready.
-    //If not -> There is a problem (no characteristics found).
-    //       -> Connecting stops and the pulse stops.
+
     setState(() {
       status = (rxChar != null && txChar != null)
-          ? "Ready. Enter PIN."
+          ? "Connected. Waiting for nonce..."
           : "Characteristics not found.";
       _isConnecting = false;
     });
@@ -185,18 +194,39 @@ class _BLEDoorScreenState extends State<BLEDoorScreen>
     _pulseController.stop();
   }
 
-  // ---------------- Send PIN ----------------
+  // ---------------- Compute HMAC ----------------
+  // Computes HMAC-SHA256(PIN + nonce, sharedSecret)
+  String computeHmac(String pin, String nonce) {
+    final key = utf8.encode(sharedSecret);
+    final bytes = utf8.encode(pin + nonce);
+    final hmac = Hmac(sha256, key);
+    return hmac.convert(bytes).toString();
+  }
+
+  // ---------------- Send HMAC ----------------
   Future<void> sendPIN() async {
-    //Protection:if there is no characteristic for writing or the PIN is not 4, We will not send
+    // Protection checks
     if (rxChar == null) return;
-    if (pinController.text.trim().length != 4) return; 
-    //Sends the PIN as bytes to the ESP32.
-    await rxChar!.write(utf8.encode(pinController.text.trim()));
-    setState(() => status = "PIN sent...");
+    if (currentNonce == null) {
+      setState(() => status = "Nonce not received yet");
+      return;
+    }
+
+    final pin = pinController.text.trim();
+    if (pin.length != 4) return;
+
+    // Compute HMAC instead of sending PIN
+    final hmacValue = computeHmac(pin, currentNonce!);
+
+    // Send HMAC as bytes to ESP32
+    await rxChar!.write(utf8.encode(hmacValue));
+
+    setState(() => status = "HMAC sent...");
     pinController.clear();
   }
-  //It considers itself connected if we find rxChar
-  bool get _isConnected => rxChar != null;
+
+  // It considers itself connected if we find rxChar
+  bool get _isConnected => rxChar != null && currentNonce != null;
 
   Color _statusColor() {
     if (doorOpened) return successGreen;
@@ -215,11 +245,6 @@ class _BLEDoorScreenState extends State<BLEDoorScreen>
         padding: const EdgeInsets.all(20),
         child: Column(
           children: [
-            //AnimatedBuilder rebuilds the section as the animation value changes.
-            // If connecting ->s Enlarges the circle up to 5%.
-            // Draws a circle + icon:
-                // If doorOpened true → Door icon
-                // Otherwise, lock
             AnimatedBuilder(
               animation: _pulseController,
               builder: (_, __) {
@@ -276,9 +301,8 @@ class _BLEDoorScreenState extends State<BLEDoorScreen>
               ),
             ),
             const SizedBox(height: 20),
-            //The button activates only if: 
-            //Connected (_isConnected)And the PIN is valid (4 digits)
             ElevatedButton(
+              // Button enabled only if connected AND nonce received AND PIN valid
               onPressed: _isConnected && _isPinValid ? sendPIN : null,
               child: const Text("UNLOCK DOOR"),
             ),
@@ -313,7 +337,7 @@ class _BLEDoorScreenState extends State<BLEDoorScreen>
 
   @override
   void dispose() {
-    //Cancel subscription
+    // Cancel subscription
     // Edit TextEditingController
     // Stop AnimationController
     // Then call super.dispose
