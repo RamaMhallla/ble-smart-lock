@@ -1,0 +1,155 @@
+[
+    {
+        "id": "58d411023043f039",
+        "type": "tab",
+        "label": "Flow 1",
+        "disabled": false,
+        "info": "",
+        "env": []
+    },
+    {
+        "id": "48542cab34a0c8b5",
+        "type": "debug",
+        "z": "58d411023043f039",
+        "name": "debug 2",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "false",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 520,
+        "y": 340,
+        "wires": []
+    },
+    {
+        "id": "770aae3714c9455f",
+        "type": "debug",
+        "z": "58d411023043f039",
+        "name": "debug 1",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 330,
+        "y": 300,
+        "wires": []
+    },
+    {
+        "id": "f1a6306d5e07e6f5",
+        "type": "mqtt out",
+        "z": "58d411023043f039",
+        "name": "",
+        "topic": "door_access/result",
+        "qos": "2",
+        "retain": "false",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "8e8e3661cfe4a972",
+        "x": 550,
+        "y": 440,
+        "wires": []
+    },
+    {
+        "id": "7687ce78fdf5302a",
+        "type": "mqtt in",
+        "z": "58d411023043f039",
+        "name": "",
+        "topic": "door_access/request",
+        "qos": "2",
+        "datatype": "auto-detect",
+        "broker": "8e8e3661cfe4a972",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 110,
+        "y": 400,
+        "wires": [
+            [
+                "770aae3714c9455f",
+                "c0669fb647467f94"
+            ]
+        ]
+    },
+    {
+        "id": "c0669fb647467f94",
+        "type": "https-node",
+        "z": "58d411023043f039",
+        "name": "",
+        "method": "POST",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "https://csp-server:5001/validate",
+        "tls": "8c11095f4e36bc1c",
+        "persist": false,
+        "proxy": "",
+        "authType": "",
+        "senderr": false,
+        "x": 330,
+        "y": 440,
+        "wires": [
+            [
+                "f1a6306d5e07e6f5",
+                "48542cab34a0c8b5"
+            ]
+        ]
+    },
+    {
+        "id": "8e8e3661cfe4a972",
+        "type": "mqtt-broker",
+        "name": "",
+        "broker": "mosquitto",
+        "port": "1883",
+        "clientid": "",
+        "autoConnect": true,
+        "usetls": false,
+        "protocolVersion": "4",
+        "keepalive": "60",
+        "cleansession": true,
+        "autoUnsubscribe": true,
+        "birthTopic": "",
+        "birthQos": "0",
+        "birthPayload": "",
+        "birthMsg": {},
+        "closeTopic": "",
+        "closePayload": "",
+        "closeMsg": {},
+        "willTopic": "",
+        "willQos": "0",
+        "willPayload": "",
+        "willMsg": {},
+        "userProps": "",
+        "sessionExpiry": ""
+    },
+    {
+        "id": "8c11095f4e36bc1c",
+        "type": "tls-config",
+        "name": "",
+        "cert": "",
+        "key": "",
+        "ca": "",
+        "certname": "",
+        "keyname": "",
+        "caname": "ca.crt",
+        "servername": "csp-server",
+        "verifyservercert": true,
+        "alpnprotocol": ""
+    },
+    {
+        "id": "5dbd07bf65dfbb85",
+        "type": "global-config",
+        "env": [],
+        "modules": {
+            "node-red-contrib-https": "2.0.0"
+        }
+    }
+]
