@@ -1,138 +1,235 @@
-#include <BLEDevice.h> //To enable BLE on ESP32 (Bluetooth configuration).
-#include <BLEServer.h> //ESP32 as Server (receives a connection from the phone)
-#include <BLEUtils.h> //Helpful tools within BLE (definitions and help functions).
-#include <BLE2902.h> //famous Descriptor with notify, so that devices (such as iOS/Android) accept notifications.
+/*******************************************************
+ * ESP32 BLE + HMAC Auth + MQTT (AAA via CSP)
+ *******************************************************/
 
-// UART-like BLE service (Nordic UART)
-#define SERVICE_UUID           "6e400001-b5a3-f393-e0a9-e50e24dcca9e" 
-//RX Characteristic: The mobile phone writes to it (Write) to send data to the ESP32.
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
+#include "mbedtls/md.h"
+
+#include <WiFi.h>
+#include <PubSubClient.h>
+
+// ===================== SECURITY =====================
+const char* SHARED_SECRET = "SUPER_SECRET_KEY";
+const char* CORRECT_PIN   = "1234";
+const char* OTP_CODE      = "123456";
+
+String currentNonce = "";
+
+// ===================== WIFI + MQTT ==================
+const char* WIFI_SSID = "RAMA_WIFI_MOBILE";
+const char* WIFI_PASS = "rr99rr99rr";
+
+const char* MQTT_BROKER = "10.146.61.134";
+const int   MQTT_PORT   = 1883;
+
+const char* TOPIC_REQUEST = "door_access/request";
+const char* TOPIC_RESULT  = "door_access/result";
+
+const char* DEVICE_ID = "ESP32_GARAGE_01";
+const char* USER_ID   = "mobile_user_01";
+
+// ===================== BLE UUIDs ====================
+#define SERVICE_UUID           "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 #define CHARACTERISTIC_RX_UUID "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
-//TX Characteristic: The ESP32 sends a (Notify) message to send a reply to the mobile phone.
 #define CHARACTERISTIC_TX_UUID "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
 
-//A server pointer variable. Initially empty (nullptr).
+// ===================== GLOBALS ======================
 BLEServer* pServer = nullptr;
-
-//Indicators for Characteristics (TX for transmission, RX for reception).
 BLECharacteristic* pTxCharacteristic = nullptr;
 BLECharacteristic* pRxCharacteristic = nullptr;
 
-//A variable to determine whether a (mobile) client is connected or not.
-bool deviceConnected = false;
+WiFiClient espClient;
+PubSubClient mqttClient(espClient);
 
-const char* CORRECT_PIN = "1234";
+bool waitingCSP = false;
 
-// ====================== Server Callbacks ======================
-// class inherits from BLEServerCallbacks so that we run code while connection/disconnection.
-class MyServerCallbacks : public BLEServerCallbacks {
-  //When a mobile phone connects:Set deviceConnected = true, Print on Serial that a client has connected.
-  void onConnect(BLEServer* pServer) override {
-    deviceConnected = true;
-    Serial.println(">>> Client connected");
+// ===================== UTILS ========================
+String generateNonce() {
+  return String(esp_random(), HEX);
+}
+
+String computeHMAC(const String& msg) {
+  byte hmacResult[32];
+  mbedtls_md_context_t ctx;
+
+  mbedtls_md_init(&ctx);
+  mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 1);
+  mbedtls_md_hmac_starts(
+    &ctx,
+    (const unsigned char*)SHARED_SECRET,
+    strlen(SHARED_SECRET)
+  );
+  mbedtls_md_hmac_update(
+    &ctx,
+    (const unsigned char*)msg.c_str(),
+    msg.length()
+  );
+  mbedtls_md_hmac_finish(&ctx, hmacResult);
+  mbedtls_md_free(&ctx);
+
+  char hex[65];
+  for (int i = 0; i < 32; i++) {
+    sprintf(hex + i * 2, "%02x", hmacResult[i]);
   }
+  hex[64] = '\0';
+  return String(hex);
+}
 
-  //When the phone disconnects: Set deviceConnected to false and Print a message.
-  void onDisconnect(BLEServer* pServer) override {
-    deviceConnected = false;
-    Serial.println(">>> Client disconnected");
-
-    // VERY IMPORTANT: restart advertising
-    delay(300);
-    //We bring the current advertising object.
-    BLEAdvertising* adv = BLEDevice::getAdvertising();
-    //We restart the ad so that any mobile device can detect the device again and reconnect.
-    //We print a message stating that the ad is back.
-    //Important Because some settings might stop the ad after disconnection if you don't restart it.
-    adv->start();
-    Serial.println(">>> Advertising restarted!");
+void notifyBLE(const String& msg) {
+  if (pTxCharacteristic) {
+    pTxCharacteristic->setValue(msg.c_str());
+    pTxCharacteristic->notify();
   }
-};
+}
 
-// ====================== RX Callbacks ==========================
-//A class dedicated to handling events on a characteristic (writing).
-class MyCallbacks : public BLECharacteristicCallbacks {
-  //This function is called automatically when the phone is running Write on RX.
-  void onWrite(BLECharacteristic* characteristic) override {
-
-    //It reads data written as String (Arduino String).
-    String val = characteristic->getValue(); 
-
-    // Convert Arduino String to std::string (so that the comparison is convenient).
-    std::string valueStd = std::string(val.c_str());
-
-    //If there is no data (empty) -> Exit.
-    if (valueStd.length() == 0) return;
-
-    Serial.print("Received PIN: ");
-    //The PIN that arrived is printed on the Serial Monitor.
-    Serial.println(valueStd.c_str());
-
-    if (valueStd == CORRECT_PIN) {
-      Serial.println("PIN correct → Opening door!");
-      //The message is prepared as "OK" on TX and sent to the mobile device via Notify.
-      pTxCharacteristic->setValue("OK");
-      pTxCharacteristic->notify();
+// ===================== MQTT =========================
+void ensureMQTT() {
+  while (!mqttClient.connected()) {
+    String clientId = "ESP32_" + String(esp_random(), HEX);
+    Serial.print("Connecting to MQTT...");
+    if (mqttClient.connect(clientId.c_str())) {
+      Serial.println(" connected ✅");
+      mqttClient.subscribe(TOPIC_RESULT);
     } else {
-      Serial.println("WRONG PIN → Access denied");
-      pTxCharacteristic->setValue("WRONG");
-      pTxCharacteristic->notify();
+      Serial.println(" failed, retrying...");
+      delay(1000);
     }
   }
+}
+
+void publishAccessRequest() {
+  ensureMQTT();
+
+  String payload =
+    "{"
+    "\"device_id\":\"" + String(DEVICE_ID) + "\","
+    "\"user_id\":\"" + String(USER_ID) + "\","
+    "\"otp\":\"" + String(OTP_CODE) + "\""
+    "}";
+
+  Serial.println("MQTT OUT -> " + payload);
+  mqttClient.publish(TOPIC_REQUEST, payload.c_str());
+}
+
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  if (!waitingCSP) return;
+
+  String msg;
+  for (unsigned int i = 0; i < length; i++) {
+    msg += (char)payload[i];
+  }
+
+  Serial.println("MQTT IN -> " + msg);
+
+  if (msg.indexOf("\"result\":\"OK\"") >= 0) {
+    notifyBLE("OK");
+  } else {
+    notifyBLE("WRONG");
+  }
+
+  waitingCSP = false;
+}
+
+// ===================== BLE CALLBACKS ================
+
+// 🔹 Server callbacks (اتصال / فصل)
+class MyServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer* pServer) override {
+    Serial.println("Client connected");
+    currentNonce = "";   // فقط reset
+  }
+
+  void onDisconnect(BLEServer* pServer) override {
+    Serial.println("Client disconnected");
+    currentNonce = "";
+  }
 };
 
 
+// 🔹 RX characteristic (استقبال HMAC)
+class MyRXCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* c) override {
+    String received = c->getValue();
+    received.trim();
+
+    Serial.println("BLE RX -> " + received);
+
+    // 🟢 أول رسالة من Flutter → أرسل nonce
+    if (currentNonce == "") {
+      currentNonce = generateNonce();
+      Serial.println("Nonce -> " + currentNonce);
+      notifyBLE(currentNonce);
+      return;
+    }
+
+    // 🟢 تحقق HMAC
+    String expected = computeHMAC(String(CORRECT_PIN) + currentNonce);
+
+    if (received.equalsIgnoreCase(expected)) {
+      notifyBLE("PENDING");
+      waitingCSP = true;
+      publishAccessRequest();
+    } else {
+      notifyBLE("WRONG");
+    }
+
+    currentNonce = ""; // nonce one-time
+  }
+};
+
+
+// ===================== SETUP ========================
 void setup() {
   Serial.begin(115200);
-  delay(1000);
 
-  Serial.println("========== ESP32 Garage Door ==========");
-  //The device name is specified in the advertisement (this is the name Flutter is looking for).
-  BLEDevice::init("GarageDoorESP");
+  // WiFi
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi connected");
 
-  //The server is created.
-  //Callbacks are established for connection/disconnection.
+  mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
+  mqttClient.setCallback(mqttCallback);
+
+  // BLE init
+  BLEDevice::init("ESP32_GARAGE_01");
+
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
-  
-  //The Service creates the specified UUID.
-  BLEService* pService = pServer->createService(SERVICE_UUID);
 
-  // TX (ESP32 -> mobile)
-  //Creates a TX characteristic with notify properties only.
-  pTxCharacteristic = pService->createCharacteristic(
+  BLEService* service = pServer->createService(SERVICE_UUID);
+
+  pTxCharacteristic = service->createCharacteristic(
     CHARACTERISTIC_TX_UUID,
     BLECharacteristic::PROPERTY_NOTIFY
   );
-  //The BLE2902 adds a descriptor to enable proper notification on devices.
   pTxCharacteristic->addDescriptor(new BLE2902());
 
-  // RX (mobile -> ESP32)
-  //RX creates characteristic with write properties.
-  pRxCharacteristic = pService->createCharacteristic(
+  pRxCharacteristic = service->createCharacteristic(
     CHARACTERISTIC_RX_UUID,
     BLECharacteristic::PROPERTY_WRITE
   );
-  //The callback is linked to onWrite (when the mobile phone writes the PIN).
-  pRxCharacteristic->setCallbacks(new MyCallbacks());
+  pRxCharacteristic->setCallbacks(new MyRXCallbacks());
 
-  pService->start();
+  service->start();
 
   BLEAdvertising* adv = BLEDevice::getAdvertising();
-  //Adding the service UUID to the advertisement so that the mobile phone knows the service is supported.
-  adv->addServiceUUID(SERVICE_UUID);
-  //Allow sending scan response (additional information when scan).
   adv->setScanResponse(true);
-  //BLE connection settings (especially helpful for stability on some iOS/Android devices).
-  adv->setMinPreferred(0x06);
-  adv->setMaxPreferred(0x12);
-
-  //The announcement begins: The mobile phone can now see GarageDoorESP.
+  adv->addServiceUUID(SERVICE_UUID);
   adv->start();
 
-  Serial.println("Bluetooth Ready – Waiting for connections...");
-  Serial.println("============================================");
+  Serial.println("BLE Ready");
 }
 
-//No need for a loop because everything works via callbacks.
-//When the phone enters a PIN, onWrite activates automatically.
-void loop() {}
+// ===================== LOOP =========================
+void loop() {
+  if (WiFi.status() == WL_CONNECTED) {
+    if (!mqttClient.connected()) ensureMQTT();
+    mqttClient.loop();
+  }
+}

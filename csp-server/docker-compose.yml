@@ -1,0 +1,81 @@
+services:
+  # 1. Transport Layer: The MQTT Broker
+  mosquitto:
+    image: eclipse-mosquitto:latest
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mosquitto-data:/mosquitto/data
+      - mosquitto-logs:/mosquitto/log
+
+  # 2. Accounting Layer: InfluxDB
+  influxdb:
+    image: influxdb:latest
+    ports:
+      - "8086:8086"
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=admin1234
+      - DOCKER_INFLUXDB_INIT_ORG=iot_org
+      - DOCKER_INFLUXDB_INIT_BUCKET=security_logs
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=my-secure-token
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+
+  # 3. Authentication Layer: Python CSP Server
+  csp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile-csp
+    ports:
+      - "5001:5001"
+    environment:
+      - INFLUX_URL=http://influxdb:8086
+      - INFLUX_TOKEN=my-secure-token
+      - INFLUX_ORG=iot_org
+      - INFLUX_BUCKET=security_logs
+    depends_on:
+      - influxdb
+
+  # Background Workers using the same Dockerfile as the CSP
+  mqtt-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile-csp
+    command: python mqttHandler.py
+    depends_on:
+      - mosquitto
+      - nodered-csp
+      - csp-server
+
+  test-publisher:
+    build:
+      context: .
+      dockerfile: Dockerfile-csp
+    command: python publishScript.py
+    depends_on:
+      - mosquitto
+      - nodered-csp
+      - csp-server
+      - mqtt-worker
+
+  # 4. Authorization Layer: Node-RED
+  nodered-csp:
+    build:
+      context: .
+      dockerfile: Dockerfile-nodered
+    ports:
+      - "1880:1880"
+    depends_on:
+      - csp-server
+      - mosquitto
+    volumes:
+      - nodered-data:/data
+
+volumes:
+  influxdb-data:
+  nodered-data:
+  mosquitto-data:
+  mosquitto-logs:

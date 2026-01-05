@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'ble_door_screen.dart';
 
 void main() {
+  FlutterBluePlus.setLogLevel(LogLevel.verbose);
+
   runApp(const MyApp());
 }
 
