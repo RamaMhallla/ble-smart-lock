@@ -57,7 +57,7 @@ bool waitingCSP = false;
 
 // ===================== UTILS ========================
 //esp_random() generates a random number from the hardware.
-It is converted to a HEX string.
+//It is converted to a HEX string.
 String generateNonce() {
   return String(esp_random(), HEX);
 }
