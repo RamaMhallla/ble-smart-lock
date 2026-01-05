@@ -14,6 +14,11 @@
 #include <WiFi.h>
 //MQTT client
 #include <PubSubClient.h>
+#include <time.h>
+const char* NTP_SERVER = "pool.ntp.org";
+const long  GMT_OFFSET_SEC = 0;
+const int   DAYLIGHT_OFFSET_SEC = 0;
+
 
 // ===================== SECURITY =====================
 //A secret key shared between Flutter and ESP32 (must not be revealed).
@@ -93,6 +98,23 @@ String computeHMAC(const String& msg) {
 }
 //so the final output is HMAC_HEX = HMAC_SHA256(secret, msg)
 
+
+String getISOTimestamp() {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    return "1970-01-01T00:00:00Z";
+  }
+
+  char buf[30];
+  strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &timeinfo);
+  return String(buf);
+}
+
+
+
+
+
+
 void notifyBLE(const String& msg) {
   //If TX exists:
     // Sets the value
@@ -133,11 +155,16 @@ void ensureMQTT() {
 void publishAccessRequest() {
   ensureMQTT();
 
+  // ✅ added: generate ISO timestamp for Flask
+  String timestamp = getISOTimestamp();
+
   String payload =
     "{"
-    "\"device_id\":\"" + String(DEVICE_ID) + "\","
-    "\"user_id\":\"" + String(USER_ID) + "\","
-    "\"otp\":\"" + String(OTP_CODE) + "\""
+      "\"device_id\":\"" + String(DEVICE_ID) + "\","
+      "\"user_id\":\""   + String(USER_ID)   + "\","
+      "\"event\":\"door_access/request\","
+      "\"otp\":\""       + String(OTP_CODE)  + "\","
+      "\"timestamp\":\"" + timestamp         + "\""
     "}";
 
   Serial.println("MQTT OUT -> " + payload);
@@ -160,7 +187,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   // Otherwise:
     // Sends WRONG.
   // Finally, waitingCSP = false means we're done.
-  if (msg.indexOf("\"result\":\"OK\"") >= 0) {
+   if (msg.indexOf("\"result\":\"OK\"") >= 0 ||
+      msg.indexOf("\"authorized\":true") >= 0) {
     notifyBLE("OK");
   } else {
     notifyBLE("WRONG");
@@ -259,6 +287,9 @@ void setup() {
     Serial.print(".");
   }
   Serial.println("\nWiFi connected");
+
+  // ✅ added: init NTP so getLocalTime() works
+  configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
 
   //MQTT configuration:
   // Specifies broker/port
