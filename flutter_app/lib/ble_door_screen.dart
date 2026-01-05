@@ -1,7 +1,7 @@
 //It provides async tools such as StreamSubscription, Future, and Timer.
 // we will use it for Subscription for scan results.
 import 'dart:async';
-//String ⇄ bytes.
+//String ⇄ bytes
 import 'dart:convert';
 
 //Cryptographic library (hashing/HMAC).
