@@ -14,15 +14,15 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 //To request Bluetooth + location permissions on Android.
 import 'package:permission_handler/permission_handler.dart';
 
-class BLEDoorScreen extends StatefulWidget {
+class BLEDoorSecureScreen extends StatefulWidget {
   //StatefulWidget because the state changes: connection, nonce, door state…
-  const BLEDoorScreen({super.key});
+  const BLEDoorSecureScreen({super.key});
 
   @override
-  State<BLEDoorScreen> createState() => _BLEDoorScreenState();
+  State<BLEDoorSecureScreen> createState() => _BLEDoorScreenState();
 }
 
-class _BLEDoorScreenState extends State<BLEDoorScreen>
+class _BLEDoorScreenState extends State<BLEDoorSecureScreen>
     with SingleTickerProviderStateMixin {
     //SingleTickerProviderStateMixin is necessary because wehave an AnimationController (pulse) operator.
 
