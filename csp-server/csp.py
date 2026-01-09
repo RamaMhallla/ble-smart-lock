@@ -61,4 +61,4 @@ def validate_device():
     return {"authorized": is_valid}, 200 if is_valid else 401
 
 if __name__ == '__main__':
-    app.run(debug=True,host="0.0.0.0", port=5001,ssl_context=('server.crt', 'server.key'))
+    app.run(debug=True,host="0.0.0.0", port=5001,ssl_context=('./certs/server.crt', './certs/server.key'))

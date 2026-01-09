@@ -4,10 +4,11 @@ import time
 if __name__ == "__main__":
     time.sleep(10)
     addr_broker = "mosquitto"
-    port = 1883
+    port = 8883
     topic = "door_access/request"
     keepalive = 60
-    publisherMQTT = MQTThandler(addr_broker, port, topic, keepalive)
+    publisherMQTT = MQTThandler(addr_broker, port, topic, keepalive,ca_cert="./certs/ca.crt",client_cert="./certs/client.crt",# The script's identity
+    client_key="./certs/client.key")
 
     # Generate current time in ISO 8601 format with 'Z' suffix
     # Example: 2026-01-03T18:16:10.123456Z

@@ -8,6 +8,7 @@ services:
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
       - mosquitto-data:/mosquitto/data
       - mosquitto-logs:/mosquitto/log
+      - ./certs:/mosquitto/config/certs:ro # NEW: Mount the entire certs directory as Read-Only
 
   # 2. Accounting Layer: InfluxDB
   influxdb:

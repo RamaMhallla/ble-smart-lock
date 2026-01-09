@@ -10,4 +10,4 @@ RUN npm install node-red-contrib-https
 
 # Copy your flow and CA certificate
 COPY flows.json /data/flows.json
-COPY ca.crt /data/ca.crt
+COPY ./certs /data/certs
