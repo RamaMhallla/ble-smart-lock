@@ -22,6 +22,7 @@ write_api = client.write_api(write_options=SYNCHRONOUS)
 def index():
     return "CSP AAA Service is running."
 
+
 @app.route('/validate', methods=['POST'])
 def validate_device():
     # Safely parse JSON
@@ -31,8 +32,10 @@ def validate_device():
 
     device_id = data.get('device_id', 'unknown_device')
     user_id   = data.get('user_id', 'unknown_user')
-    event     = data.get('event', 'door_access/request')
+    event     = data.get('event', 'unknown_user_event')
     otp_code  = data.get('otp', '')
+    sensor_data = data.get('sensor_data', {})
+
 
     timestamp_str = data.get("timestamp")
 
@@ -57,8 +60,13 @@ def validate_device():
             .tag("user", user_id)
             .tag("event", event)
             .field("authorized", 200 if is_valid else 401)
+            
             .time(event_time)
         )
+        if sensor_data:
+            for key, value in sensor_data.items():
+                if isinstance(value, (int, float)):
+                    point.field(key, value)
         write_api.write(bucket=INFLUX_BUCKET, record=point)
     else:
         print(" INFLUX_BUCKET not set — skipping InfluxDB write")
