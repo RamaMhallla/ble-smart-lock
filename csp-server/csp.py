@@ -22,17 +22,43 @@ write_api = client.write_api(write_options=SYNCHRONOUS)
 def index():
     return "CSP AAA Service is running."
 
+def invalid_request_logging(incorret_data):
+    if INFLUX_BUCKET:
+        point = (
+            Point("security_alerts")
+            .tag("alert_type", "MALFORMED_REQUEST")
+            .tag("source_ip", request.remote_addr) # Records who tried it
+            .field("error_code", 400)
+            .time(datetime.now(timezone.utc))
+        )
+        if incorret_data:
+            for key, value in incorret_data.items():
+                point.field(key, value)
+
+        write_api.write(bucket=INFLUX_BUCKET, record=point)
+    
+    print(f"ALERT: Malformed request received from {request.remote_addr}")
+
 @app.route('/validate', methods=['POST'])
 def validate_device():
     # Safely parse JSON
     data = request.get_json(silent=True)
-    if not data:
-        return jsonify({"error": "Invalid JSON"}), 400
+    if data is None:
+        invalid_request_logging({})
+        print(f"ALERT: Malformed request received from {request.remote_addr}")
+        return jsonify({"authorized": False, "reason": "Invalid JSON"}), 400
 
-    device_id = data.get('device_id', 'unknown_device')
-    user_id   = data.get('user_id', 'unknown_user')
-    event     = data.get('event', 'door_access/request')
+    device_id = data.get('device_id', '')
+    user_id   = data.get('user_id', '')
+    event     = data.get('event', '')
+
+    if  device_id=='' or user_id=='' or event=='':
+        invalid_request_logging(data)
+        return jsonify({"authorized": False, "reason": "Missing required fields"}), 400
+
     otp_code  = data.get('otp', '')
+    sensor_data = data.get('sensor_data', {})
+
 
     timestamp_str = data.get("timestamp")
 
@@ -59,16 +85,15 @@ def validate_device():
             .field("authorized", 200 if is_valid else 401)
             .time(event_time)
         )
+        if sensor_data:
+            for key, value in sensor_data.items():
+                if isinstance(value, (int, float)):
+                    point.field(key, value)
         write_api.write(bucket=INFLUX_BUCKET, record=point)
     else:
         print(" INFLUX_BUCKET not set — skipping InfluxDB write")
 
-    return jsonify({"authorized": is_valid}), (200 if is_valid else 401)
+        return jsonify({"authorized": is_valid}), (200 if is_valid else 401)
 
 if __name__ == '__main__':
-    app.run(
-        debug=True,
-        host="0.0.0.0",
-        port=5001,
-        ssl_context=('certs/server.crt', 'certs/server.key')
-    )
+    app.run(debug=True,host="0.0.0.0", port=5001,ssl_context=('./certs/server.crt', './certs/server.key'))

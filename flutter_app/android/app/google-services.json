@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "480424167724",
+    "project_id": "flutter-iot-security",
+    "storage_bucket": "flutter-iot-security.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:480424167724:android:b8b834aba9fb3099c10489",
+        "android_client_info": {
+          "package_name": "com.example.flutter_iot_security"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA-_j30LiYmIQwPTkS86cX2qdz82jICoWI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

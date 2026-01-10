@@ -10,7 +10,7 @@
 
 //ESP32 encryption library for HMAC-SHA256 extraction
 #include "mbedtls/md.h"
-
+#include "WiFiClientSecure.h"
 #include <WiFi.h>
 //MQTT client
 #include <PubSubClient.h>
@@ -33,7 +33,7 @@ const char* WIFI_SSID = "RAMA_WIFI_MOBILE";
 const char* WIFI_PASS = "rr99rr99rr";
 
 const char* MQTT_BROKER = "10.146.61.134";
-const int   MQTT_PORT   = 1883;
+const int   MQTT_PORT   = 8883;
 
 const char* TOPIC_REQUEST = "door_access/request";
 const char* TOPIC_RESULT  = "door_access/result";
@@ -41,6 +41,87 @@ const char* TOPIC_RESULT  = "door_access/result";
 const char* DEVICE_ID = "ESP32_GARAGE_01";
 const char* USER_ID   = "mobile_user_01";
 
+const char* CA_cert = \
+"-----BEGIN CERTIFICATE-----\n" \
+"MIIEBTCCAu2gAwIBAgIUGzedoEDTi0biAqaF5pM75KBeHSYwDQYJKoZIhvcNAQEL\n" \
+"BQAwgZExCzAJBgNVBAYTAklUMREwDwYDVQQIDAhDYWxhYnJpYTEQMA4GA1UEBwwH\n" \
+"Q29zZW56YTEUMBIGA1UECgwLSW90U2VjdXJpdHkxDDAKBgNVBAsMA2NzcDETMBEG\n" \
+"A1UEAwwKY3NwLXNlcnZlcjEkMCIGCSqGSIb3DQEJARYVdmRhbWljb3dvcmtAZ21h\n" \
+"aWwuY29tMB4XDTI2MDEwNDExNDczNloXDTMxMDEwMzExNDczNlowgZExCzAJBgNV\n" \
+"BAYTAklUMREwDwYDVQQIDAhDYWxhYnJpYTEQMA4GA1UEBwwHQ29zZW56YTEUMBIG\n" \
+"A1UECgwLSW90U2VjdXJpdHkxDDAKBgNVBAsMA2NzcDETMBEGA1UEAwwKY3NwLXNl\n" \
+"cnZlcjEkMCIGCSqGSIb3DQEJARYVdmRhbWljb3dvcmtAZ21haWwuY29tMIIBIjAN\n" \
+"BgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAq2XXRC/ZHmlsC3tSkBBkKSYajRmR\n" \
+"QYfy47WFTsS6cy0IDnFyCRsoR3FxX0hQZv5yHbPrqeexPlhC9ozUyB4m0sJ48IvU\n" \
+"xTBiwJsUfqUYPkKU3GKIghxSFJdk4PLTlW8VhleMheVbanU197Z1WsP8/JSom3+B\n" \
+"jctqgOTPxc5yqamAqTG89NhtxAl7a7OJNen8/YfgrtGWEs5UhJzcYUgwjCdrK29D\n" \
+"PyJLu+AJYrOm2igH2yy2ERrLe6IiZ/md/SKf+rMDOuHtkNcn10aENLOvaRe+sntx\n" \
+"6kHzmgsHh5PhSg9zUo/PVpZsVbGvDOblgfbAF3IP/abue5NN5lSFcIF4qQIDAQAB\n" \
+"o1MwUTAdBgNVHQ4EFgQUR8VObiwy9iDgsuMZNsplzx8hdwMwHwYDVR0jBBgwFoAU\n" \
+"R8VObiwy9iDgsuMZNsplzx8hdwMwDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0B\n" \
+"AQsFAAOCAQEAQtU92CobwSmpkBgkk29rG3DK/nT5NKh34bwgmR7ZfzNssxDsxCaF\n" \
+"qgCvYvoL1BwrIk+rUUu7M+quQEee6OYqToHdRqpAMG4w5VGX+OKjAuS6P+TOmhT/\n" \
+"2XblNXgMtKmvYnhkYqgu+tGRM4P+8/fYXoKiIaVQhUKtFFLas8ubpvqQHzxGDXa2\n" \
+"6pomTYyLMaLBLZtbmKdHgcesrYhVogiepK13+KVhlROKNBe5iVwrWBLmMynCadVq\n" \
+"WrdMj3NXcWEYYEaPtdHn7LFYJ5HezpwxIiBWuu0bhMhu1NyrzCtN8BS2vVdj+vdq\n" \
+"JPHGicBDtdH/d4x29cpyUZQntNl3cPBpQw==\n" \
+"-----END CERTIFICATE-----";
+
+const char* ESP_CA_cert = \
+"-----BEGIN CERTIFICATE-----\n" \
+"MIID9zCCAt+gAwIBAgIUNZpJEPmyE5KriRUmNQkfV6B9CX4wDQYJKoZIhvcNAQEL\n" \
+"BQAwgZExCzAJBgNVBAYTAklUMREwDwYDVQQIDAhDYWxhYnJpYTEQMA4GA1UEBwwH\n" \
+"Q29zZW56YTEUMBIGA1UECgwLSW90U2VjdXJpdHkxDDAKBgNVBAsMA2NzcDETMBEG\n" \
+"A1UEAwwKY3NwLXNlcnZlcjEkMCIGCSqGSIb3DQEJARYVdmRhbWljb3dvcmtAZ21h\n" \
+"aWwuY29tMB4XDTI2MDEwOTE2Mjc0NVoXDTI3MDEwOTE2Mjc0NVowgZQxCzAJBgNV\n" \
+"BAYTAklUMREwDwYDVQQIDAhDYWxhYnJpYTEQMA4GA1UEBwwHQ29zZW56YTEUMBIG\n" \
+"A1UECgwLSW90U2VjdXJpdHkxDzANBgNVBAsMBkNsaWVudDETMBEGA1UEAwwKSW90\n" \
+"LUNsaWVudDEkMCIGCSqGSIb3DQEJARYVdmRhbWljb3dvcmtAZ21haWwuY29tMIIB\n" \
+"IjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxL7D7bj6MkacYbzItt/GM88A\n" \
+"QwQ7Tf/9RbJtoD1F2Gw7GGQ/Kym0jHKSI1SMWYe214AfThOHD6sW+A2yBDfu/Ft2\n" \
+"GufCGU3igoQgcid7bXQk51DNGscqQwnEz8Lhtt0cc87JlofEeT7/xgPsXU1aWaGv\n" \
+"bdbfY+xun+hgWfHeGXzq4GJNcoVIMGVtOjJ+C7n5qOOmsiKqANH5gfrA2U+ZKPp8\n" \
+"xQsoIwryfq6zi+5kenVkQFCNed5ALKAivOFLHdSndJVzpizIpw/9Xb/oOTNoXorD\n" \
+"00yh2diOMDIWz9vCLDSFe+w3rEW77BXP3tAPvTsv/H9FUEA4xUWlUGKIPIHJEwID\n" \
+"AQABo0IwQDAdBgNVHQ4EFgQU8IOeTOZCESzd9ysE4M1hJHAcV+kwHwYDVR0jBBgw\n" \
+"FoAUR8VObiwy9iDgsuMZNsplzx8hdwMwDQYJKoZIhvcNAQELBQADggEBACe1KOfE\n" \
+"gG6U/GNuUKVbgwdK7lNBT8Uw8huv+CLFDAZh+HDMUK9P/2GnflWjInLB4MAIN4JV\n" \
+"tZbZv/bkPnsVtzimR0VQtn/T/taD+UY14sKT9qsFSzrUMLzvQ+yZA0ZSH/y7AI2I\n" \
+"ekW1EjS+hXjs/bsLJoMmu+XeEZRJV9Wpr/xpEbipUY5R81wMWuuLHHSdTbTSKJ5W\n" \
+"NpCkw/0PfDawoffH0jhT7j7Jnvuz4UmKNGWDjT/lLybyMDYACILMrKqysKm+J9P0\n" \
+"4FFxUa5VEgX0YexMEF7gbCI1lXPQCGzp9JO03v3ABvG/mrvXIfxfnQqRGCz6rF/L\n" \
+"gtpBGKozlgIJxB8=\n" \
+"-----END CERTIFICATE-----";
+
+const char* ESP_RSA_key= \
+"-----BEGIN PRIVATE KEY-----\n" \
+"MIIEugIBADANBgkqhkiG9w0BAQEFAASCBKQwggSgAgEAAoIBAQDEvsPtuPoyRpxh\n" \
+"vMi238YzzwBDBDtN//1Fsm2gPUXYbDsYZD8rKbSMcpIjVIxZh7bXgB9OE4cPqxb4\n" \
+"DbIEN+78W3Ya58IZTeKChCByJ3ttdCTnUM0axypDCcTPwuG23RxzzsmWh8R5Pv/G\n" \
+"A+xdTVpZoa9t1t9j7G6f6GBZ8d4ZfOrgYk1yhUgwZW06Mn4Lufmo46ayIqoA0fmB\n" \
+"+sDZT5ko+nzFCygjCvJ+rrOL7mR6dWRAUI153kAsoCK84Usd1Kd0lXOmLMinD/1d\n" \
+"v+g5M2heisPTTKHZ2I4wMhbP28IsNIV77DesRbvsFc/e0A+9Oy/8f0VQQDjFRaVQ\n" \
+"Yog8gckTAgMBAAECggEAUY257aqFm52FaUY19QghQoyF0UHJy3VXaTKjGo8LisCi\n" \
+"ZmP3g07QVn+PcDG1087bzcyALX8Ot0H2TXBv4CvHVrga5uA2pwKP6AYY5PjUwvQn\n" \
+"7/Kgcn8oV42PFYf0xDY3exG2oj05BgFFSLGLoslTsF/DNkahZuw0lvheKCqIJAvX\n" \
+"x0uvW3vgDh0VaBTiPPQo5SvgGxVA1Ks1RfXYBEv444tDZO1WJ+8mq+DGtoveHuyu\n" \
+"1S1bWgoVzHvH+lbi2gg/DgH9uQxt0B7NhrFGuk1+R3c9Z94uA3+B8NWpiNHsF+Fa\n" \
+"gkl+nz8LzeUeSd6fy7Z7KXs9+hbu6nYUb/U6+BJq4QKBgQDivYlTL/M0Sr7yYDyg\n" \
+"VHHJ6ThyGtowjbd1QnUx7sQ715j0K1HRGZlcuKm+1cTvzFVHkkdPXng3A/JRVGon\n" \
+"PU2TZF8AcCX0+gvuKslNujBsQjIqPiva4j4gn8jz1bvvMFoKiyWPA9SoYa/S4XsL\n" \
+"n14qIT50gqfoSkrjk9ppI6wAmwKBgQDeIlMtCrviiWIRyWjxgcV26+7uCYpKDMhJ\n" \
+"jBsSiv1g0/iVi/CbuPkgqrcS/IM8rZJAlbi5DWGz1TC5vCg8KYy9uPDZrEDGBn77\n" \
+"wO5MIkgqv4wtG2rdwaEzCmlgz08QsOdeM71bz7jfs8ckrBew2Ne8yWHg56IRVFo6\n" \
+"SDXrq3106QKBgByFoySnv3wwetyaZoX0mWvAvqz7276H1TAW8A8b7etpL4Bngp8/\n" \
+"DR+wywmKcn+HwKKEMBw30f95q523dLMC7yM/WQQBF4U9fwqyryfr5/N2UEEoGPQr\n" \
+"yYzpDKo/lKh9+JWi81KONM4Jm8h3PLc1kO7Tx7t4RA7gaZM/IhZful9JAn9dth1g\n" \
+"4yZga5Tz7ARZ3mVvxhkGUwAEPWBBptnE+N3r+4DjliXrjB2NqneRivXSo2cP2BoV\n" \
+"949ATrA/qyFOQDkf0OXK7uBkqljn3HyrocrQPf7lCKwM4aMf5USPkuXIJNl25Fz+\n" \
+"XqOfvDhHQFK+SLy66Dpip1W3+d4WuGAHDFHhAoGAcRXQq3RLiIFCy0+KQrG9TOlN\n" \
+"INVubO9cj7cUiNT+uP+Tvdgas7TyGmpfnTwRoZ6IjCIT3opM+AVZ2xZE07+jrHtS\n" \
+"cQqeh+8fZqUpKKY6RcbNi5DP/DmFKspxPvG4JbmbNqG26pwASRZIcdOAVbsTjBYA\n" \
+"R4jxmJrEZLZwvAJ9rqs=\n" \
+"-----END PRIVATE KEY-----";
 // ===================== BLE UUIDs ====================
 //This is a “UART over BLE” model:
 // RX: From mobile → ESP32 (Write)
@@ -54,7 +135,7 @@ BLEServer* pServer = nullptr;
 BLECharacteristic* pTxCharacteristic = nullptr;//To send a notification to the mobile device.
 BLECharacteristic* pRxCharacteristic = nullptr;//To receive a write request from the mobile device.
 
-WiFiClient espClient;
+WiFiClientSecure espClient;
 PubSubClient mqttClient(espClient);//An MQTT client using espClient for network connectivity.
 
 //waitingCSP: If true, it means "I sent an MQTT request and I'm waiting for a CSP response."
@@ -294,7 +375,11 @@ void setup() {
   //MQTT configuration:
   // Specifies broker/port
   //Specifies message callback
+  espClient.setCACert(CA_cert);          //Root CA certificate
+  espClient.setCertificate(ESP_CA_cert); //for client verification if the require_certificate is set to true in the mosquitto broker config
+  espClient.setPrivateKey(ESP_RSA_key);  //for client verification if the require_certificate is set to true in the mosquitto broker config
   mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
+
   mqttClient.setCallback(mqttCallback);
 
   // BLE init
