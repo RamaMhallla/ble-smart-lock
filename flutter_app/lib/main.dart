@@ -1,8 +1,24 @@
-import 'package:flutter/material.dart';
-import 'secure/ble_secure_screen.dart';
-import 'insecure/ble_insecure_screen.dart';
+import 'dart:io';
 
-void main() {
+import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter_iot_security/http_override.dart';
+import 'package:flutter_iot_security/screens/mode_selector_screen.dart';
+import 'package:flutter_iot_security/secure/ble_secure_screen.dart';
+import 'firebase_options.dart';
+import 'services/fcm_service.dart';
+import 'package:firebase_core/firebase_core.dart';
+
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  HttpOverrides.global = MyHttpOverrides();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
+  await FCMService.init(); 
+
   runApp(const MyApp());
 }
 
@@ -11,55 +27,9 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
+    return const MaterialApp(
       debugShowCheckedModeBanner: false,
-      home: const ModeSelectorScreen(),
-    );
-  }
-}
-
-class ModeSelectorScreen extends StatelessWidget {
-  const ModeSelectorScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text("Smart Lock – Test Modes")),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            ElevatedButton.icon(
-              icon: const Icon(Icons.lock),
-              label: const Text("Secure Mode"),
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const BLEDoorSecureScreen(),
-                  ),
-                );
-              },
-            ),
-            const SizedBox(height: 20),
-            ElevatedButton.icon(
-              icon: const Icon(Icons.warning),
-              label: const Text("Insecure Mode"),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.orange,
-              ),
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const BLEDoorInsecureScreen(),
-                  ),
-                );
-              },
-            ),
-          ],
-        ),
-      ),
+      home: ModeSelectorScreen(), 
     );
   }
 }
