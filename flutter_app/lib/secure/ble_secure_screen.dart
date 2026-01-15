@@ -1,82 +1,73 @@
-//It provides async tools such as StreamSubscription, Future, and Timer.
-// we will use it for Subscription for scan results.
 import 'dart:async';
-//String ⇄ bytes
 import 'dart:convert';
+import 'dart:io';
 
-//Cryptographic library (hashing/HMAC).
-//Used to generate HMAC(sha256, key).
 import 'package:crypto/crypto.dart';
-
 import 'package:flutter/material.dart';
-//BLE library: scan/connect/discover/notify/write.
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
-//To request Bluetooth + location permissions on Android.
 import 'package:permission_handler/permission_handler.dart';
+import 'package:http/io_client.dart';
 
 class BLEDoorSecureScreen extends StatefulWidget {
-  //StatefulWidget because the state changes: connection, nonce, door state…
   const BLEDoorSecureScreen({super.key});
 
   @override
-  State<BLEDoorSecureScreen> createState() => _BLEDoorScreenState();
+  State<BLEDoorSecureScreen> createState() => _BLEDoorSecureScreenState();
 }
 
-class _BLEDoorScreenState extends State<BLEDoorSecureScreen>
+class _BLEDoorSecureScreenState extends State<BLEDoorSecureScreen>
     with SingleTickerProviderStateMixin {
-    //SingleTickerProviderStateMixin is necessary because wehave an AnimationController (pulse) operator.
-
   // ================= SECURITY =================
-  //A shared secret key between the mobile phone and the ESP32.we'll use it to create an HMAC file.
-  //NOTE: Storing secrets within the app is easily exposed (Reverse Engineering).
-  // It's better to keep secrets within the ESP32 and on the mobile device for a more robust mechanism.
-  // I WILL CHANGE IT LATER 
   static const String sharedSecret = "SUPER_SECRET_KEY";
 
-  // Nordic UART Service UUID
-  //Use it to identify your device from advertising and to select a service during discovery.
   static const String serviceUuid =
       "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 
   // ================= BLE =================
   BluetoothDevice? device;
-  BluetoothCharacteristic? rxChar; //for writing from the mobile device to the ESP32
-  BluetoothCharacteristic? txChar; //For notifications/reading from the ESP32 mobile
+  BluetoothCharacteristic? rxChar;
+  BluetoothCharacteristic? txChar;
 
-  //Subscribe to the scan results stream.
-  //Important: Disable it in dispose().
   StreamSubscription<List<ScanResult>>? _scanSub;
 
-
-  String? currentNonce; //random number sent by the ESP32 (challenge)
-  bool _connectingNow = false; //Prevents you from connecting to more than one device at the same time (lock)
+  String? currentNonce;
+  bool _connectingNow = false;
 
   // ================= UI =================
-  final TextEditingController pinController = TextEditingController(); //The PIN text was captured from TextField.
+  final TextEditingController pinController = TextEditingController();
   late final AnimationController _pulseController;
 
+  bool _isConnecting = false;
+  bool _isPinValid = false;
+  bool _isPinObscured = true;
+  bool doorOpened = false;
+  bool _waitingForOTP = false;
 
-  bool _isConnecting = false; //Disables the connect button and displays the status.
-  bool _isPinValid = false;   //Valid if its length is 4.
-  bool _isPinObscured = true; //Hides the PIN.
-  bool doorOpened = false; //Changes the icon.
+  String status = "Ready";
 
-  String status = "Ready"; //Displays the user's status message.
+  // ================= CSP CONFIG =================
+  static const String CSP_BASE_URL = "https://10.146.61.134:5001";
+  static const String USER_ID = "mobile_user_01";
+  static const String DEVICE_ID = "ESP32_GARAGE_01";
+
+  late final IOClient _httpClient;
 
   @override
   void initState() {
     super.initState();
-     //I created an animation controller that lasted 1.2 seconds.
-      //vsync: this because the State is set with SingleTickerProviderStateMixin.
+
+    final HttpClient httpClient = HttpClient();
+    httpClient.badCertificateCallback =
+        (X509Certificate cert, String host, int port) {
+      return host == "10.146.61.134";
+    };
+    _httpClient = IOClient(httpClient);
+
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1200),
     );
 
-
-    //Every time the text changes:
-    // Calculates if the PIN length is 4.
-    // If the status changes, setState triggers the UI (activating the UNLOCK button).
     pinController.addListener(() {
       final valid = pinController.text.trim().length == 4;
       if (valid != _isPinValid) {
@@ -91,84 +82,41 @@ class _BLEDoorScreenState extends State<BLEDoorSecureScreen>
     await Permission.bluetoothConnect.request();
     await Permission.location.request();
 
-    //Waits until Bluetooth turns ON.
-    //.where(...).first means: the first time the condition is met.
     await FlutterBluePlus.adapterState
         .where((s) => s == BluetoothAdapterState.on)
         .first;
   }
 
   // ================= SCAN & CONNECT =================
-    //Preparing the state before deletion:
-        // Resets everything
-        // Considers itself "connecting"
-        // Deletes the old nonce
   Future<void> scanAndConnect() async {
     setState(() {
-      status = "Scanning for ESP32...";
+      status = "Scanning for device...";
       _isConnecting = true;
       doorOpened = false;
       currentNonce = null;
-      device = null;
-      rxChar = null;
-      txChar = null;
-      _connectingNow = false;
+      _waitingForOTP = false;
     });
 
-    _pulseController.repeat(reverse: true);//plays a pulse animation
-
+    _pulseController.repeat(reverse: true);
     await _ensurePermissions();
 
+    await FlutterBluePlus.stopScan();
+    await _scanSub?.cancel();
 
-    await FlutterBluePlus.stopScan();//Stops any previous scans.
-    await _scanSub?.cancel();// Cancels any existing subscriptions.
-
-      //It starts listening to the scan results.
     _scanSub = FlutterBluePlus.onScanResults.listen((results) async {
-      if (_connectingNow) return; //If a connection is initiated, nothing happens (protection).
+      if (_connectingNow) return;
 
-
-      //It scans each displayed device.
-      // It reads the service UUIDs in the advertisement.
-      // It prints the advertisement name, UUIDs, and MAC/ID.
       for (final r in results) {
-        final uuids = r.advertisementData.serviceUuids;
-
-        debugPrint(
-          "FOUND => adv='${r.advertisementData.advName}' "
-          "uuids=$uuids id=${r.device.remoteId}",
-        );
-
-      //If any UUID from the advertisement equals the UUID of the UART service
-      if (uuids.any((u) => u.toString().toLowerCase() == serviceUuid)) {
-          //Once connected:
-              // Prevents duplicate  the connection
-              // Stops scanning
-              // Waits for a second (Fixes timing issues in Android before connecting)
+        if (r.device.name == DEVICE_ID) {
           _connectingNow = true;
-
-          debugPrint("ESP32 FOUND → stopping scan");
-
           await FlutterBluePlus.stopScan();
-
-          // Android BLE timing fix
-          await Future.delayed(const Duration(seconds: 1));
-
-          //Update status
-          // Call connectToDevice
-          // Return to stop rotation immediately after the first compatible device.
-          setState(() => status = "Connecting to ESP32...");
+          setState(() => status = "Connecting...");
           await connectToDevice(r.device);
           return;
         }
       }
     });
-    
-    //If scan timeout ends, the subscription will be automatically cancelled.
-    FlutterBluePlus.cancelWhenScanComplete(_scanSub!);
 
-    //The scan lasts for 15 seconds.
-    //LowLatency: Faster but consumes more battery.
     await FlutterBluePlus.startScan(
       timeout: const Duration(seconds: 15),
       androidScanMode: AndroidScanMode.lowLatency,
@@ -176,130 +124,85 @@ class _BLEDoorScreenState extends State<BLEDoorSecureScreen>
   }
 
   // ================= CONNECT =================
- Future<void> connectToDevice(BluetoothDevice d) async {
-  try {
-    //The selected device is saved.
-    device = d;
+  Future<void> connectToDevice(BluetoothDevice d) async {
+    try {
+      device = d;
+      await device!.connect(
+        timeout: const Duration(seconds: 15),
+        license: License.free,
+      );
 
-    // It hears and prints connection status changes (connected/disconnected…).
-    device!.connectionState.listen((s) {
-      debugPrint("BLE STATE => $s");
-    });
-
-    debugPrint(" Connecting to ${d.remoteId}");
-
-
-    await device!.connect(
-      autoConnect: false,//Direct connection
-      timeout: const Duration(seconds: 15), license: License.free,
-    );
-    
-    //After success:
-      // Changes status
-      // Discovers services and features.
-    debugPrint(" BLE CONNECTED");
-
-    setState(() => status = "Discovering services...");
-    await discoverServices();
-  } catch (e) {
-    //If it fails:
-          // Prints the error
-          // Returns to normal
-          // Stops animation
-    debugPrint(" CONNECT ERROR: $e");
-
-    setState(() {
-      status = "Connection failed";
-      _isConnecting = false;
-      _connectingNow = false;
-    });
-    _pulseController.stop();
-  }
-}
-
-  // ================= DISCOVER SERVICES =================
-  //Find RX/TX and enable notify
-  Future<void> discoverServices() async {
-    if (device == null) return; //Protection: If there is no device, exit.
-
-    final services = await device!.discoverServices(); //request from BLE stack list of services.
-
-    //It searches for the required UART service.
-    // Then it searches for its characteristics.
-    for (final s in services) {
-      if (s.uuid.toString() == serviceUuid) {
-        for (final c in s.characteristics) {
-          //If the characteristic UUID is RX (for write) => store it in rxChar.
-            if (c.uuid.toString() ==
-            "6e400002-b5a3-f393-e0a9-e50e24dcca9e") {
-          rxChar = c;
-        }
-        //If the characteristic UUID is TX (for notify) => store it in txChar.
-        if (c.uuid.toString() ==
-            "6e400003-b5a3-f393-e0a9-e50e24dcca9e") {
-          txChar = c;
-        }
-
-        }
-      }
-    }
-    //If RX or TX is found:
-        // Indicates an error for the user
-        // Disables connection/pulse
-        // Exit
-    if (rxChar == null || txChar == null) {
+      setState(() => status = "Discovering services...");
+      await discoverServices();
+    } catch (e) {
       setState(() {
-        status = "UART characteristics not found";
+        status = "Connection failed";
         _isConnecting = false;
         _connectingNow = false;
       });
       _pulseController.stop();
+    }
+  }
+
+  // ================= DISCOVER SERVICES =================
+  Future<void> discoverServices() async {
+    final services = await device!.discoverServices();
+
+    for (final s in services) {
+      if (s.uuid.toString().toLowerCase() == serviceUuid.toLowerCase()) {
+        for (final c in s.characteristics) {
+          final uuid = c.uuid.toString().toLowerCase();
+          if (uuid == "6e400002-b5a3-f393-e0a9-e50e24dcca9e") rxChar = c;
+          if (uuid == "6e400003-b5a3-f393-e0a9-e50e24dcca9e") txChar = c;
+        }
+      }
+    }
+
+    if (rxChar == null || txChar == null) {
+      setState(() => status = "UART service not found");
+      _pulseController.stop();
       return;
     }
 
-    //Enables notifications on the TX.
-    // This allows it to receive messages from the ESP32 in real time.
     await txChar!.setNotifyValue(true);
-    //  trigger nonce
-      //Send "HELLO" to the ESP32.
-      //The idea is: when the ESP32 receives HELLO, it responds with a nonce.
     await rxChar!.write(utf8.encode("HELLO"));
 
-    //It retrieves the last received value from TX.
-    // It converts bytes to a string.
-    // It prints it.
     txChar!.lastValueStream.listen((value) {
       final msg = utf8.decode(value).trim();
-      debugPrint("BLE IN => $msg");
 
-      // Nonce
-      //If you don't have a nonce yet (currentNonce == null)
-      // and the message isn't empty and isn't one of the known responses,
-      // then treat it as a nonce.
-      // Save it and tell the user to enter their PIN.
-      if (currentNonce == null &&
-          msg.isNotEmpty &&
-          msg != "OK" &&
-          msg != "WRONG" &&
-          msg != "PENDING") {
-        currentNonce = msg;
-        setState(() => status = "Nonce received. Enter PIN.");
-        return;
-      }
-      //Updates the status on the screen.
-      // If OK, the door icon opens.
-      // If WRONG, it closes.
       setState(() {
-        status = "ESP32: $msg";
-        if (msg == "OK") doorOpened = true;
-        if (msg == "WRONG") doorOpened = false;
+        if (currentNonce == null &&
+            msg.isNotEmpty &&
+            msg != "OK" &&
+            msg != "WRONG" &&
+            msg != "PENDING") {
+          currentNonce = msg;
+          status = "Nonce received. Enter PIN.";
+          return;
+        }
+
+        if (msg == "PENDING") {
+          status = "OTP verification required";
+          _waitingForOTP = true;
+          _showOtpDialog();
+          return;
+        }
+
+        if (msg == "OK") {
+          status = "Access granted";
+          doorOpened = true;
+          _waitingForOTP = false;
+          return;
+        }
+
+        if (msg == "WRONG") {
+          status = "Access denied";
+          doorOpened = false;
+          _waitingForOTP = false;
+        }
       });
     });
 
-    //After enabling notify and sending a HELLO:
-        // It is considered “Connected”
-        // we stop the connection
-        // The pulse stops
     setState(() {
       status = "Connected. Waiting for nonce...";
       _isConnecting = false;
@@ -308,54 +211,86 @@ class _BLEDoorScreenState extends State<BLEDoorSecureScreen>
     _pulseController.stop();
   }
 
+  // ================= OTP DIALOG =================
+  Future<void> _showOtpDialog() async {
+    final controller = TextEditingController();
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        title: const Text("OTP Verification"),
+        content: TextField(
+          controller: controller,
+          maxLength: 6,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(labelText: "OTP"),
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () async {
+              final otp = controller.text.trim();
+              await _submitOtpToCSP(otp);
+              if (mounted) Navigator.pop(context);
+            },
+            child: const Text("Verify"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ================= SUBMIT OTP =================
+  Future<void> _submitOtpToCSP(String otp) async {
+    if (otp.isEmpty) {
+      setState(() => status = "OTP is required");
+      return;
+    }
+
+    setState(() => status = "Submitting OTP...");
+
+    try {
+      final res = await _httpClient.post(
+        Uri.parse("$CSP_BASE_URL/submit_otp"),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "user_id": USER_ID,
+          "device_id": DEVICE_ID,
+          "otp": otp,
+        }),
+      );
+
+      if (res.statusCode == 200) {
+        setState(() => status = "OTP verified. Waiting for device response...");
+      } else {
+        setState(() => status = "OTP verification failed");
+      }
+    } catch (e) {
+      setState(() => status = "Network error while sending OTP");
+    }
+  }
+
   // ================= HMAC =================
-  //`key`: Converts the secret to bytes.
-  // `bytes`: Converts the message to bytes (the message = PIN + nonce).
-  // `Generates an HMAC using SHA-256.
-  // `Returns the result as a hex string.`
-  // Security Concept: Instead of sending the PIN itself, you send the HMAC.
-  // The ESP32 (which has the same sharedSecret and the nonce that was sent) calculates the same HMAC.
-  // If they match → it means the user knows the correct PIN.
-  // Important Security Note: If an attacker records an HMAC once, they cannot reuse it because the nonce changes each time (this is called a challenge-response).
   String computeHmac(String pin, String nonce) {
     final key = utf8.encode(sharedSecret);
     final bytes = utf8.encode(pin + nonce);
-    final hmac = Hmac(sha256, key);
-    return hmac.convert(bytes).toString();
+    return Hmac(sha256, key).convert(bytes).toString();
   }
 
   // ================= SEND PIN =================
-  //Send HMAC instead of PIN
   Future<void> sendPIN() async {
-    if (rxChar == null || currentNonce == null) return; //If there is no RX or nonce → we cannot send.
+    if (currentNonce == null) {
+      setState(() => status = "Nonce not available");
+      return;
+    }
 
-    //It reads the PIN and confirms the 4 digits.
-    final pin = pinController.text.trim();
-    if (pin.length != 4) return;
-
-    //HMAC is calculated using the current nonce.
-    final hmacValue = computeHmac(pin, currentNonce!);
-
-    //The HMAC is sent to the ESP32 via the RX characteristic.
+    final hmacValue = computeHmac(pinController.text, currentNonce!);
     await rxChar!.write(utf8.encode(hmacValue));
 
-    //updates the user interface.
-    setState(() {
-      status = "HMAC sent. Waiting decision...";
-      doorOpened = false;
-    });
-
-    //The nonce become null (until a new session).
-    // The PIN field is cleared.
-    currentNonce = null;
+    setState(() => status = "Credentials sent. Waiting response...");
     pinController.clear();
+    currentNonce = null;
   }
-//Get returns true if:
-    // Connected
-    // You have RX/TX
-    // You have received nonce
-  bool get _readyToUnlock =>
-      device != null && rxChar != null && txChar != null && currentNonce != null;
 
   // ================= UI =================
   @override
@@ -372,37 +307,38 @@ class _BLEDoorScreenState extends State<BLEDoorSecureScreen>
               color: doorOpened ? Colors.green : Colors.blueGrey,
             ),
             const SizedBox(height: 20),
-            Text(status, textAlign: TextAlign.center),
-            const SizedBox(height: 30),
+            Text(status),
+            const SizedBox(height: 20),
             TextField(
               controller: pinController,
               maxLength: 4,
               obscureText: _isPinObscured,
               keyboardType: TextInputType.number,
               decoration: InputDecoration(
-                hintText: "Enter PIN",
+                labelText: "PIN",
                 suffixIcon: IconButton(
                   icon: Icon(
-                      _isPinObscured ? Icons.visibility : Icons.visibility_off),
-                  onPressed: () =>
-                      setState(() => _isPinObscured = !_isPinObscured),
+                    _isPinObscured ? Icons.visibility : Icons.visibility_off,
+                  ),
+                  onPressed: () {
+                    setState(() => _isPinObscured = !_isPinObscured);
+                  },
                 ),
               ),
             ),
             const SizedBox(height: 20),
-            //If the conditions are met → it works and sends HMAC.
-            // If not → null means disabled.
             ElevatedButton(
-              onPressed: _readyToUnlock && _isPinValid ? sendPIN : null,
+              onPressed:
+                  (!_waitingForOTP && _isPinValid && currentNonce != null)
+                      ? sendPIN
+                      : null,
               child: const Text("UNLOCK"),
             ),
             const SizedBox(height: 20),
-            //If it's not connecting → disabled
-            // If it's not → scanAndConnect is working
             ElevatedButton.icon(
               onPressed: _isConnecting ? null : scanAndConnect,
               icon: const Icon(Icons.bluetooth),
-              label: Text(_isConnecting ? "CONNECTING..." : "CONNECT"),
+              label: const Text("CONNECT"),
             ),
           ],
         ),
@@ -412,22 +348,10 @@ class _BLEDoorScreenState extends State<BLEDoorSecureScreen>
 
   @override
   void dispose() {
-    //Cancels the scan subscription.
-    // Releases the TextField controller.
-    // Stops/releases the AnimationController.
-    // Then calls super.dispose().
+    _httpClient.close();
     _scanSub?.cancel();
     pinController.dispose();
     _pulseController.dispose();
     super.dispose();
   }
 }
-
-
-// TO do :
-// 1- UUIDs: Keep the comparison lowercase for both sides.
-// 2- Separate nonce messages from other messages: It's best for the ESP32 to send nonces in a clear format like NONCE:<value> instead of relying on "not OK/WRONG".
-// 3- Shared secrets within the application are a risk: 
-  // Storage the secret only on the ESP32 + use pairing/bonding + BLE secure connections.
-  // Or use a public-key challenge instead of a static secret.
-
