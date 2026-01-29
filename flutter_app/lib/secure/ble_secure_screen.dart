@@ -1,9 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:crypto/crypto.dart'; // Add crypto package
+import 'package:crypto/crypto.dart';
+import 'package:encrypt/encrypt.dart' as encrypt;
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
+
+// Update this import to point to your Base Class
+import 'package:flutter_iot_security/insecure/ble_insecure_screen.dart'; 
 
 class BLEDoorSecureScreen extends StatefulWidget {
   const BLEDoorSecureScreen({super.key});
@@ -12,153 +16,139 @@ class BLEDoorSecureScreen extends StatefulWidget {
   State<BLEDoorSecureScreen> createState() => _BLEDoorSecureScreenState();
 }
 
-// 1. Extend the Base State class we just created
-class _BLEDoorSecureScreenState<T extends StatefulWidget>extends State<T>
-    with SingleTickerProviderStateMixin {
-  static const String  serviceUuid =
-      "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+class _BLEDoorSecureScreenState extends BLEDoorBaseState<BLEDoorSecureScreen> {
+  
+  // ================= SECURITY CONFIG =================
+  static const String sharedSecret = "SUPER_SECRET_KEY";
+  static const String aesKeyStr = "1234567890123456"; 
+  static const String aesIvStr  = "abcdefghijklmnop"; 
 
-  BluetoothDevice? device;
-  BluetoothCharacteristic? rxChar;
-  BluetoothCharacteristic? txChar;
+  String? currentNonce;
 
-  StreamSubscription<List<ScanResult>>? scanSub;
-  bool connectingNow = false;
+  // ================= HELPER: AES ENCRYPTION =================
+  String encryptAES(String plainText) {
+    final key = encrypt.Key.fromUtf8(aesKeyStr);
+    final iv = encrypt.IV.fromUtf8(aesIvStr);
+    final encrypter = encrypt.Encrypter(encrypt.AES(key, mode: encrypt.AESMode.cbc));
+    final encrypted = encrypter.encrypt(plainText, iv: iv);
+    return encrypted.base64; 
+  }
 
-  // ================= UI STATE =================
-  final TextEditingController pinController = TextEditingController();
-  late final AnimationController pulseController;
+  // ================= HELPER: AES DECRYPTION =================
+  String decryptAES(String encryptedBase64) {
+    try {
+      final key = encrypt.Key.fromUtf8(aesKeyStr);
+      final iv = encrypt.IV.fromUtf8(aesIvStr);
+      final encrypter = encrypt.Encrypter(encrypt.AES(key, mode: encrypt.AESMode.cbc));
+      final encrypted = encrypt.Encrypted.fromBase64(encryptedBase64);
+      return encrypter.decrypt(encrypted, iv: iv);
+    } catch (e) {
+      print("Decryption Failed: $e");
+      return "";
+    }
+  }
 
-  bool isConnecting = false;
-  bool _isPinValid = false;
-  bool _isPinObscured = true;
-  bool doorOpened = false;
+  // ================= HELPER: HMAC CALCULATION =================
+  String computeHmac(String pin, String nonce) {
+    final key = utf8.encode(sharedSecret);
+    final bytes = utf8.encode(pin + nonce);
+    final hmac = Hmac(sha256, key);
+    return hmac.convert(bytes).toString();
+  }
 
-  String status = "Ready";
-
+  // ================= OVERRIDE: SCANNING (BROAD SCAN - FIXES VISIBILITY) =================
   @override
-  void initState() {
-    super.initState();
-
-    pulseController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1200),
-    );
-
-    pinController.addListener(() {
-      final valid = pinController.text.trim().length == 4;
-      if (valid != _isPinValid) {
-        setState(() => _isPinValid = valid);
-      }
-    });
-  }
-
-  // ================= PERMISSIONS =================
-  Future<void> _ensurePermissions() async {
-    await Permission.bluetoothScan.request();
-    await Permission.bluetoothConnect.request();
-    await Permission.location.request();
-
-    await FlutterBluePlus.adapterState
-        .where((s) => s == BluetoothAdapterState.on)
-        .first;
-  }
-
-  // ================= SCAN & CONNECT =================
   Future<void> scanAndConnect() async {
     setState(() {
-      status = "Scanning for device...";
+      status = "Scanning (Secure)...";
       isConnecting = true;
       doorOpened = false;
-      device = null;
-      rxChar = null;
-      txChar = null;
+      currentNonce = null;
       connectingNow = false;
     });
 
     pulseController.repeat(reverse: true);
+    
+    // Ensure permissions
+    await [
+      Permission.bluetoothScan,
+      Permission.bluetoothConnect,
+      Permission.location,
+    ].request();
 
-    await _ensurePermissions();
-
-    await FlutterBluePlus.stopScan();
+    // Stop any previous scan
+    await FlutterBluePlus.stopScan(); 
     await scanSub?.cancel();
 
+    // Listen to results
     scanSub = FlutterBluePlus.onScanResults.listen((results) async {
       if (connectingNow) return;
 
       for (final r in results) {
-        final uuids = r.advertisementData.serviceUuids;
+        // MANUAL FILTER (Exactly like Insecure Mode)
+        // This ensures the device is found even if OS filtering fails
+        final hasUUID = r.advertisementData.serviceUuids
+            .any((u) => u.str128.toLowerCase() == BLEDoorBaseState.serviceUuid);
 
-
-        if (uuids.any((u) => u.toString().toLowerCase() == serviceUuid)
-) {
+        if (hasUUID) {
           connectingNow = true;
           await FlutterBluePlus.stopScan();
-          await Future.delayed(const Duration(seconds: 1));
-
-          setState(() => status = "Connecting...");
+          
+          setState(() => status = "Found ${r.device.platformName}. Connecting...");
           await connectToDevice(r.device);
           return;
         }
       }
     });
 
-    FlutterBluePlus.cancelWhenScanComplete(scanSub!);
-
+    // START BROAD SCAN (No Filters = Better Visibility)
     await FlutterBluePlus.startScan(
       timeout: const Duration(seconds: 15),
-      androidScanMode: AndroidScanMode.lowLatency,
+      androidScanMode: AndroidScanMode.lowLatency, 
     );
   }
 
-  // ================= CONNECT =================
+  // ================= OVERRIDE: CONNECTION LOGIC =================
+  @override
   Future<void> connectToDevice(BluetoothDevice d) async {
     try {
       device = d;
-
+      
+      // FIX: Removed invalid license parameter
       await device!.connect(
-        autoConnect: false,
+        autoConnect: false, 
         timeout: const Duration(seconds: 15),
-        license: License.free,
+        license: License.free
       );
 
       setState(() => status = "Discovering services...");
-      await discoverServices();
+      await _secureDiscoverServices();
+      
     } catch (e) {
+      print("Connection Error: $e");
       setState(() {
-        status = "Connection failed";
-          isConnecting = false;
-          connectingNow = false;
+        status = "Connection Failed";
+        isConnecting = false;
       });
       pulseController.stop();
     }
   }
 
-  // ================= DISCOVER SERVICES =================
-  Future<void> discoverServices() async {
-    if (device == null) return;
-
+  Future<void> _secureDiscoverServices() async {
     final services = await device!.discoverServices();
 
     for (final s in services) {
-      if (s.uuid.toString().toLowerCase() == serviceUuid) {
+      if (s.uuid.str128.toLowerCase() == BLEDoorBaseState.serviceUuid) {
         for (final c in s.characteristics) {
-          final uuid = c.uuid.toString().toLowerCase();
-          if (uuid ==
-              "6e400002-b5a3-f393-e0a9-e50e24dcca9e") rxChar = c;
-          if (uuid ==
-              "6e400003-b5a3-f393-e0a9-e50e24dcca9e") txChar = c;
+           final uuid = c.uuid.str128.toLowerCase();
+           if (uuid.contains("6e400002")) rxChar = c;
+           if (uuid.contains("6e400003")) txChar = c;
         }
       }
     }
 
     if (rxChar == null || txChar == null) {
-      setState(() {
-        status = "UART characteristics not found";
-        isConnecting = false;
-        connectingNow = false;
-      });
-      pulseController.stop();
+      setState(() => status = "Secure Service Not Found");
       return;
     }
 
@@ -166,104 +156,69 @@ class _BLEDoorSecureScreenState<T extends StatefulWidget>extends State<T>
 
     txChar!.lastValueStream.listen((value) {
       final msg = utf8.decode(value).trim();
+      print("Raw Received from ESP: $msg");
 
       setState(() {
-        status = "ESP32: $msg";
-        if (msg == "OK") doorOpened = true;
-        if (msg == "WRONG") doorOpened = false;
-        print("the door is open: $doorOpened");
+        if (msg == "OK") {
+          status = "UNLOCKED!";
+          doorOpened = true;
+          isConnecting = false;
+          pulseController.stop();
+        } else if (msg == "WRONG") {
+          status = "Access Denied";
+          doorOpened = false;
+          isConnecting = false;
+        } else {
+          // Decrypt Nonce
+          print("Decrypting incoming nonce...");
+          //final decryptedNonce = decryptAES(msg);
+          
+        //  if (decryptedNonce.isNotEmpty) {
+         //   currentNonce = decryptedNonce;
+          if (msg.isNotEmpty) {
+            currentNonce = msg;
+            status = "Secure Channel Active.\nEnter PIN.";
+            print("Decrypted Nonce: $currentNonce");
+            isConnecting = false;
+
+            pulseController.stop();
+          } else {
+            status = "Security Error: Decryption failed";
+          }
+        }
       });
     });
 
-    setState(() {
-      status = "Connected. Enter PIN (insecure mode)";
-        isConnecting = false;
-    });
-
-    pulseController.stop();
+    print("Sending HELLO to start handshake...");
+    await rxChar!.write(utf8.encode("HELLO"));
+    setState(() => status = "Handshaking...");
   }
 
-  // ================= SEND PIN (INSECURE) =================
+  @override
   Future<void> sendPIN() async {
-    if (rxChar == null) return;
+    if (currentNonce == null) {
+      setState(() => status = "Session Expired. Reconnecting...");
+      await rxChar!.write(utf8.encode("HELLO"));
+      return;
+    }
 
     final pin = pinController.text.trim();
     if (pin.length != 4) return;
 
-    await rxChar!.write(utf8.encode(pin));
+    // 1. Compute HMAC
+    final hmacValue = computeHmac(pin, currentNonce!);
+    
+    // 2. Encrypt HMAC
+    final encryptedPayload = encryptAES(hmacValue);
+
+    // 3. Send
+    await rxChar!.write(utf8.encode(encryptedPayload));
 
     setState(() {
-      status = "PIN sent. Waiting for response...";
-      doorOpened = false;
+      status = "Verifying...";
+      currentNonce = null; 
     });
-
+    
     pinController.clear();
   }
-
-  bool get _readyToUnlock =>
-      device != null && rxChar != null && txChar != null;
-
-  // ================= UI =================
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text("Smart Lock (Insecure Mode)")),
-      body: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          children: [
-            Icon(
-              doorOpened ? Icons.lock_open : Icons.lock,
-              size: 90,
-              color: doorOpened ? Colors.green : Colors.blueGrey,
-            ),
-            const SizedBox(height: 20),
-            Text(status, textAlign: TextAlign.center),
-            const SizedBox(height: 30),
-            TextField(
-              controller: pinController,
-              maxLength: 4,
-              obscureText: _isPinObscured,
-              keyboardType: TextInputType.number,
-              decoration: InputDecoration(
-                hintText: "Enter PIN",
-                suffixIcon: IconButton(
-                  icon: Icon(
-                    _isPinObscured
-                        ? Icons.visibility
-                        : Icons.visibility_off,
-                  ),
-                  onPressed: () =>
-                      setState(() => _isPinObscured = !_isPinObscured),
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: _readyToUnlock && _isPinValid ? sendPIN : null,
-              child: const Text("UNLOCK"),
-            ),
-            const SizedBox(height: 20),
-            ElevatedButton.icon(
-              onPressed: isConnecting ? null : scanAndConnect,
-              icon: const Icon(Icons.bluetooth),
-              label:
-                  Text(isConnecting ? "CONNECTING..." : "CONNECT"),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  @override
-  void dispose() {
-    scanSub?.cancel();
-    pinController.dispose();
-    pulseController.dispose();
-    super.dispose();
-  }
 }
-
- 
-

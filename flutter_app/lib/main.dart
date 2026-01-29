@@ -1,23 +1,16 @@
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:flutter_iot_security/http_override.dart';
 import 'package:flutter_iot_security/screens/mode_selector_screen.dart';
 import 'firebase_options.dart';
-import 'services/fcm_service.dart';
 
 
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  HttpOverrides.global = MyHttpOverrides();
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
-
-  await FCMService.init(); 
-
   runApp(const MyApp());
 }
 

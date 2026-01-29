@@ -4,7 +4,6 @@ import 'package:flutter_iot_security/screens/mode_selector_screen.dart';
 
 import 'login_screen.dart';
 import 'email_verification_screen.dart';
-import '../screens/mode_selector_screen.dart';
 
 class AuthGate extends StatelessWidget {
   const AuthGate({super.key});
