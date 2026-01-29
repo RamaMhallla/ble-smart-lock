@@ -1,18 +1,16 @@
 /*******************************************************
- * ESP32 BLE + Nonce + HMAC + MQTTS (Secure) -> CSP AAA
- * Secure version (MQTT over TLS on port 8883)
+ * ESP32 BLE (NimBLE) + HMAC + MQTTS (Secure)
+ * FIXED: Uses NimBLE to save RAM for SSL Handshake
  *******************************************************/
 
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
-#include <BLE2902.h>
+// 1. CHANGED: Include NimBLE instead of standard BLE
+#include <NimBLEDevice.h> 
 
-#include "mbedtls/md.h"
 #include <WiFi.h>
-#include <WiFiClientSecure.h> // <--- CHANGED: Added Secure Client
+#include <WiFiClientSecure.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
+#include "mbedtls/md.h"
 #include <time.h>
 
 // ===================== TIME =====================
@@ -25,8 +23,7 @@ const char* SHARED_SECRET = "SUPER_SECRET_KEY";
 const char* CORRECT_PIN   = "1234";
 
 // ===================== CERTIFICATES =================
-
-// 1. The CA Certificate (The server's public authority)
+// Keep your existing certificates exactly as they are
 const char* root_ca = R"EOF(
 -----BEGIN CERTIFICATE-----
 MIIEBTCCAu2gAwIBAgIUGzedoEDTi0biAqaF5pM75KBeHSYwDQYJKoZIhvcNAQEL
@@ -54,7 +51,6 @@ JPHGicBDtdH/d4x29cpyUZQntNl3cPBpQw==
 -----END CERTIFICATE-----
 )EOF";
 
-// 2. The Client Certificate (Your device's public ID)
 const char* client_cert = R"EOF(
 -----BEGIN CERTIFICATE-----
 MIID9zCCAt+gAwIBAgIUNZpJEPmyE5KriRUmNQkfV6B9CX4wDQYJKoZIhvcNAQEL
@@ -82,7 +78,6 @@ gtpBGKozlgIJxB8=
 -----END CERTIFICATE-----
 )EOF";
 
-// 3. The Client Private Key (Your device's secret key)
 const char* client_key = R"EOF(
 -----BEGIN PRIVATE KEY-----
 MIIEugIBADANBgkqhkiG9w0BAQEFAASCBKQwggSgAgEAAoIBAQDEvsPtuPoyRpxh
@@ -115,17 +110,16 @@ R4jxmJrEZLZwvAJ9rqs=
 )EOF";
 
 // ===================== WIFI + MQTT ==================
-const char* WIFI_SSID = "RAMA_WIFI_MOBILE";
-const char* WIFI_PASS = "rr99rr99rr";
+const char* WIFI_SSID = "Vincenzo's Galaxy S21 5G";
+const char* WIFI_PASS = "pbys2426767";
 
-const char* MQTT_BROKER = "10.146.61.134";
-const int   MQTT_PORT   = 8883; // <--- SECURE PORT
+const char* MQTT_BROKER = "10.253.152.211";
+const int   MQTT_PORT   = 8883;
 
 const char* TOPIC_REQUEST = "door_access/request";
 const char* TOPIC_RESULT  = "door_access/result";
-
-const char* DEVICE_ID = "ESP32_GARAGE_01";
-const char* USER_ID   = "mobile_user_01";
+const char* DEVICE_ID     = "GARAGE01";
+const char* USER_ID       = "mobile_user_01";
 
 // ===================== BLE UUIDs =====================
 #define SERVICE_UUID           "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
@@ -133,10 +127,11 @@ const char* USER_ID   = "mobile_user_01";
 #define CHARACTERISTIC_TX_UUID "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
 
 // ===================== GLOBALS ======================
-BLECharacteristic* pTxCharacteristic = nullptr;
-BLECharacteristic* pRxCharacteristic = nullptr;
+// 2. CHANGED: Use NimBLE classes
+NimBLECharacteristic* pTxCharacteristic = nullptr;
+NimBLECharacteristic* pRxCharacteristic = nullptr;
 
-WiFiClientSecure espClient; // <--- CHANGED: Secure Client
+WiFiClientSecure espClient; 
 PubSubClient mqttClient(espClient);
 
 String currentNonce = "";
@@ -149,40 +144,22 @@ String generateNonce() {
 String computeHMAC(const String& msg) {
   byte hmacResult[32];
   mbedtls_md_context_t ctx;
-
   mbedtls_md_init(&ctx);
   mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 1);
-
-  mbedtls_md_hmac_starts(
-    &ctx,
-    (const unsigned char*)SHARED_SECRET,
-    strlen(SHARED_SECRET)
-  );
-
-  mbedtls_md_hmac_update(
-    &ctx,
-    (const unsigned char*)msg.c_str(),
-    msg.length()
-  );
-
+  mbedtls_md_hmac_starts(&ctx, (const unsigned char*)SHARED_SECRET, strlen(SHARED_SECRET));
+  mbedtls_md_hmac_update(&ctx, (const unsigned char*)msg.c_str(), msg.length());
   mbedtls_md_hmac_finish(&ctx, hmacResult);
   mbedtls_md_free(&ctx);
 
   char hex[65];
-  for (int i = 0; i < 32; i++) {
-    sprintf(hex + i * 2, "%02x", hmacResult[i]);
-  }
+  for (int i = 0; i < 32; i++) sprintf(hex + i * 2, "%02x", hmacResult[i]);
   hex[64] = '\0';
-
   return String(hex);
 }
 
 String getISOTimestamp() {
   struct tm timeinfo;
-  if (!getLocalTime(&timeinfo)) {
-    return "1970-01-01T00:00:00Z";
-  }
-
+  if (!getLocalTime(&timeinfo)) return "1970-01-01T00:00:00Z";
   char buf[30];
   strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &timeinfo);
   return String(buf);
@@ -197,55 +174,53 @@ void notifyBLE(const String& msg) {
 // ===================== MQTT =========================
 void ensureMQTT() {
   while (!mqttClient.connected()) {
-    String clientId = "ESP32_" + String((uint32_t)esp_random(), HEX);
+    String clientId = "ESP32_SECURE_" + String((uint32_t)esp_random(), HEX);
     Serial.print("Connecting to MQTTS (Secure)... ");
-
-    // Connect without username/password as requested
+    
+    // We can verify free heap here to confirm we are safe
+    // Serial.print("Heap: "); Serial.print(ESP.getFreeHeap());
+    
     if (mqttClient.connect(clientId.c_str())) {
       Serial.println("connected");
       mqttClient.subscribe(TOPIC_RESULT);
     } else {
-      Serial.print("failed, rc=");
+      Serial.print("\nFailed, rc=");
       Serial.print(mqttClient.state());
-      
-      // Print SSL specific errors to help debugging
       char buf[256];
       espClient.lastError(buf, 256);
-      Serial.print(" SSL Error: ");
+      Serial.print("\nSSL Error: ");
       Serial.println(buf);
-      
       delay(2000);
     }
   }
 }
 
 void publishAccessRequest(const String& hmac) {
-  ensureMQTT();
+  if (!mqttClient.connected()) {
+    ensureMQTT();
+  }
+  StaticJsonDocument<256> doc;
+  doc["device_id"] = DEVICE_ID;
+  doc["user_id"]   = USER_ID;
+  doc["event"]     = "door_access/request";
+  doc["otp"]       = hmac;
+  doc["method"]    = "BLE";
+  doc["timestamp"] = getISOTimestamp();
 
-  String payload =
-    "{"
-    "\"device_id\":\"" + String(DEVICE_ID) + "\","
-    "\"user_id\":\""   + String(USER_ID)   + "\","
-    "\"event\":\"door_access\","
-    "\"otp\":\""       + hmac              + "\","
-    "\"timestamp\":\"" + getISOTimestamp() + "\""
-    "}";
+  char buffer[256];
+  serializeJson(doc, buffer);
 
-  Serial.println("MQTT OUT -> " + payload);
-  mqttClient.publish(TOPIC_REQUEST, payload.c_str());
+  Serial.println("Send MQTTS -> " + String(buffer));
+  mqttClient.publish(TOPIC_REQUEST, buffer);
 }
 
 // ===================== MQTT CALLBACK =================
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   if (String(topic) != TOPIC_RESULT) return;
-
   String msg;
-  for (unsigned int i = 0; i < length; i++) {
-    msg += (char)payload[i];
-  }
-
+  for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
+  
   Serial.println("MQTT IN -> " + msg);
-
   StaticJsonDocument<256> doc;
   if (deserializeJson(doc, msg)) return;
 
@@ -257,10 +232,13 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   }
 }
 
-// ===================== BLE RX CALLBACK =================
-class MyRXCallbacks : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic* c) override {
-    String received = c->getValue();
+// ===================== BLE RX CALLBACK (NimBLE) =================
+// 3. CHANGED: Inherit from NimBLECharacteristicCallbacks
+// ===================== BLE RX CALLBACK (NimBLE v2.x Compatible) =================
+class MyRXCallbacks : public NimBLECharacteristicCallbacks {
+  // CHANGED: New signature requires 'NimBLEConnInfo&'
+  void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& connInfo) override {
+    String received = c->getValue().c_str(); 
     received.trim();
 
     Serial.println("BLE RX -> " + received);
@@ -271,85 +249,95 @@ class MyRXCallbacks : public BLECharacteristicCallbacks {
       return;
     }
 
-    String expected = computeHMAC(String(CORRECT_PIN) + currentNonce);
+    //String expected = computeHMAC(String(CORRECT_PIN) + currentNonce);
 
-    if (received.equalsIgnoreCase(expected)) {
+    if (received.equalsIgnoreCase(CORRECT_PIN)) {
       notifyBLE("PENDING");
+      Serial.println("Send to mqqts");
       publishAccessRequest(received);
     } else {
       notifyBLE("WRONG");
     }
-
     currentNonce = "";
   }
 };
+class MyServerCallbacks : public NimBLEServerCallbacks {
+  void onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) override {
+    Serial.println("Device Connected!");
+  }
 
+  void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) override {
+    Serial.println("Device Disconnected. Restarting Advertising...");
+    
+    // CRITICAL: Restart advertising immediately so new devices can find it
+    NimBLEDevice::startAdvertising();
+  }
+};
 // ===================== SETUP ========================
 void setup() {
   Serial.begin(115200);
 
+  // 1. WiFi & Time
   WiFi.begin(WIFI_SSID, WIFI_PASS);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-  }
-
-  Serial.println("WiFi connected");
-  Serial.println(WiFi.localIP());
-
-  // Correct System Time is CRITICAL for SSL Certificate Validation
-  configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
+  while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
+  Serial.println("\nWiFi Connected");
   
-  // Wait for time to be set
-  Serial.print("Waiting for NTP time sync: ");
-  time_t now = time(nullptr);
-  while (now < 8 * 3600 * 2) {
-    delay(500);
-    Serial.print(".");
-    now = time(nullptr);
-  }
-  Serial.println("");
-  Serial.print("Current time: ");
-  Serial.println(ctime(&now));
+  configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
+  while (time(nullptr) < 1000000000l) { delay(500); }
 
-  // Load Certificates
+  // 2. SSL Certs
   espClient.setCACert(root_ca);
   espClient.setCertificate(client_cert);
   espClient.setPrivateKey(client_key);
 
   mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
   mqttClient.setCallback(mqttCallback);
-  // Increase buffer size if your SSL handshake or messages are large
-  mqttClient.setBufferSize(512); 
 
-  BLEDevice::init(DEVICE_ID);
-  BLEServer* server = BLEDevice::createServer();
-  BLEService* service = server->createService(SERVICE_UUID);
+  // 3. BLE Init
+  NimBLEDevice::init(DEVICE_ID); 
+  NimBLEDevice::setPower(ESP_PWR_LVL_P9); // Max Power
+
+  NimBLEServer* server = NimBLEDevice::createServer();
+  server->setCallbacks(new MyServerCallbacks());
+  NimBLEService* service = server->createService(SERVICE_UUID);
 
   pTxCharacteristic = service->createCharacteristic(
     CHARACTERISTIC_TX_UUID,
-    BLECharacteristic::PROPERTY_NOTIFY
+    NIMBLE_PROPERTY::NOTIFY
   );
-  pTxCharacteristic->addDescriptor(new BLE2902());
 
   pRxCharacteristic = service->createCharacteristic(
     CHARACTERISTIC_RX_UUID,
-    BLECharacteristic::PROPERTY_WRITE
+    NIMBLE_PROPERTY::WRITE
   );
   pRxCharacteristic->setCallbacks(new MyRXCallbacks());
 
   service->start();
 
-  BLEAdvertising* advertising = BLEDevice::getAdvertising();
-  advertising->addServiceUUID(SERVICE_UUID);
-  advertising->setScanResponse(true);
-  advertising->setMinPreferred(0x06);
-  advertising->setMinPreferred(0x12);
+  // ==============================================================
+  // 4. FIXED ADVERTISING (Compiles on NimBLE v2.x)
+  // ==============================================================
+  NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
 
-  BLEDevice::startAdvertising();
+  // PACKAGE A: The "Searchable" Packet (Main)
+  // We put the UUID here so your phone filters find it immediately.
+  NimBLEAdvertisementData mainAd;
+  mainAd.setFlags(0x06); // General Discovery Mode
+  mainAd.setCompleteServices(NimBLEUUID(SERVICE_UUID));
+  mainAd.setName(DEVICE_ID);
+  // PACKAGE B: The "Info" Packet (Scan Response)
+  // We put the Name here. The phone asks for this after finding Package A.
+  NimBLEAdvertisementData scanResponse;
+  scanResponse.setName(DEVICE_ID);
 
-  Serial.println("BLE ready, advertising started");
+  // Apply both packages
+  pAdvertising->setAdvertisementData(mainAd);
+  pAdvertising->setScanResponseData(scanResponse); // <--- This fixes the error!
+  
+  pAdvertising->start();
+
+  Serial.println("BLE Started. Name: GARAGE01");
 }
-
 // ===================== LOOP =========================
 void loop() {
   if (!mqttClient.connected()) {

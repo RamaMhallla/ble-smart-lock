@@ -9,27 +9,27 @@ class BLEDoorInsecureScreen extends StatefulWidget {
   const BLEDoorInsecureScreen({super.key});
 
   @override
-  State<BLEDoorInsecureScreen> createState() => _BLEDoorInsecureScreenState();
+  State<BLEDoorInsecureScreen> createState() => BLEDoorBaseState();
 }
 
-class _BLEDoorInsecureScreenState extends State<BLEDoorInsecureScreen>
+class BLEDoorBaseState<T extends StatefulWidget> extends State<T>
     with SingleTickerProviderStateMixin {
   // ================= BLE CONFIG =================
-  static const String serviceUuid =
+  static const String  serviceUuid =
       "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 
   BluetoothDevice? device;
   BluetoothCharacteristic? rxChar;
   BluetoothCharacteristic? txChar;
 
-  StreamSubscription<List<ScanResult>>? _scanSub;
-  bool _connectingNow = false;
+  StreamSubscription<List<ScanResult>>? scanSub;
+  bool connectingNow = false;
 
   // ================= UI STATE =================
   final TextEditingController pinController = TextEditingController();
-  late final AnimationController _pulseController;
+  late final AnimationController pulseController;
 
-  bool _isConnecting = false;
+  bool isConnecting = false;
   bool _isPinValid = false;
   bool _isPinObscured = true;
   bool doorOpened = false;
@@ -40,7 +40,7 @@ class _BLEDoorInsecureScreenState extends State<BLEDoorInsecureScreen>
   void initState() {
     super.initState();
 
-    _pulseController = AnimationController(
+    pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1200),
     );
@@ -68,23 +68,23 @@ class _BLEDoorInsecureScreenState extends State<BLEDoorInsecureScreen>
   Future<void> scanAndConnect() async {
     setState(() {
       status = "Scanning for device...";
-      _isConnecting = true;
+      isConnecting = true;
       doorOpened = false;
       device = null;
       rxChar = null;
       txChar = null;
-      _connectingNow = false;
+      connectingNow = false;
     });
 
-    _pulseController.repeat(reverse: true);
+    pulseController.repeat(reverse: true);
 
     await _ensurePermissions();
 
     await FlutterBluePlus.stopScan();
-    await _scanSub?.cancel();
+    await scanSub?.cancel();
 
-    _scanSub = FlutterBluePlus.onScanResults.listen((results) async {
-      if (_connectingNow) return;
+    scanSub = FlutterBluePlus.onScanResults.listen((results) async {
+      if (connectingNow) return;
 
       for (final r in results) {
         final uuids = r.advertisementData.serviceUuids;
@@ -92,7 +92,7 @@ class _BLEDoorInsecureScreenState extends State<BLEDoorInsecureScreen>
 
         if (uuids.any((u) => u.toString().toLowerCase() == serviceUuid)
 ) {
-          _connectingNow = true;
+          connectingNow = true;
           await FlutterBluePlus.stopScan();
           await Future.delayed(const Duration(seconds: 1));
 
@@ -103,7 +103,7 @@ class _BLEDoorInsecureScreenState extends State<BLEDoorInsecureScreen>
       }
     });
 
-    FlutterBluePlus.cancelWhenScanComplete(_scanSub!);
+    FlutterBluePlus.cancelWhenScanComplete(scanSub!);
 
     await FlutterBluePlus.startScan(
       timeout: const Duration(seconds: 15),
@@ -127,10 +127,10 @@ class _BLEDoorInsecureScreenState extends State<BLEDoorInsecureScreen>
     } catch (e) {
       setState(() {
         status = "Connection failed";
-        _isConnecting = false;
-        _connectingNow = false;
+          isConnecting = false;
+          connectingNow = false;
       });
-      _pulseController.stop();
+      pulseController.stop();
     }
   }
 
@@ -155,10 +155,10 @@ class _BLEDoorInsecureScreenState extends State<BLEDoorInsecureScreen>
     if (rxChar == null || txChar == null) {
       setState(() {
         status = "UART characteristics not found";
-        _isConnecting = false;
-        _connectingNow = false;
+        isConnecting = false;
+        connectingNow = false;
       });
-      _pulseController.stop();
+      pulseController.stop();
       return;
     }
 
@@ -171,15 +171,16 @@ class _BLEDoorInsecureScreenState extends State<BLEDoorInsecureScreen>
         status = "ESP32: $msg";
         if (msg == "OK") doorOpened = true;
         if (msg == "WRONG") doorOpened = false;
+        print("the door is open: $doorOpened");
       });
     });
 
     setState(() {
       status = "Connected. Enter PIN (insecure mode)";
-      _isConnecting = false;
+        isConnecting = false;
     });
 
-    _pulseController.stop();
+    pulseController.stop();
   }
 
   // ================= SEND PIN (INSECURE) =================
@@ -244,10 +245,10 @@ class _BLEDoorInsecureScreenState extends State<BLEDoorInsecureScreen>
             ),
             const SizedBox(height: 20),
             ElevatedButton.icon(
-              onPressed: _isConnecting ? null : scanAndConnect,
+              onPressed: isConnecting ? null : scanAndConnect,
               icon: const Icon(Icons.bluetooth),
               label:
-                  Text(_isConnecting ? "CONNECTING..." : "CONNECT"),
+                  Text(isConnecting ? "CONNECTING..." : "CONNECT"),
             ),
           ],
         ),
@@ -257,9 +258,9 @@ class _BLEDoorInsecureScreenState extends State<BLEDoorInsecureScreen>
 
   @override
   void dispose() {
-    _scanSub?.cancel();
+    scanSub?.cancel();
     pinController.dispose();
-    _pulseController.dispose();
+    pulseController.dispose();
     super.dispose();
   }
 }

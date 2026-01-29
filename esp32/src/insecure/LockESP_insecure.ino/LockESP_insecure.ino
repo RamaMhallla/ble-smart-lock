@@ -32,11 +32,11 @@ String currentNonce = "";
 String lastPinPlain = ""; // INSECURE: store plaintext PIN received over BLE
 
 // ===================== WIFI + MQTT ==================
-const char* WIFI_SSID = "RAMA_WIFI_MOBILE";
-const char* WIFI_PASS = "rr99rr99rr";
+const char* WIFI_SSID = "Vincenzo's Galaxy S21 5G";
+const char* WIFI_PASS = "pbys2426767";
 
-const char* MQTT_BROKER = "10.146.61.134";
-const int   MQTT_PORT   = 1883;
+const char* MQTT_BROKER = "10.253.152.211";
+const int   MQTT_PORT   = 8883;
 
 const char* TOPIC_REQUEST = "door_access/request";
 const char* TOPIC_RESULT  = "door_access/result";
