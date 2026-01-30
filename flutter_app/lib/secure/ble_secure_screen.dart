@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:encrypt/encrypt.dart' as encrypt;
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
-import 'package:permission_handler/permission_handler.dart';
+
 
 // Update this import to point to your Base Class
 import 'package:flutter_iot_security/insecure/ble_insecure_screen.dart'; 
@@ -25,6 +27,8 @@ class _BLEDoorSecureScreenState extends BLEDoorBaseState<BLEDoorSecureScreen> {
 
   String? currentNonce;
 
+
+
   // ================= HELPER: AES ENCRYPTION =================
   String encryptAES(String plainText) {
     final key = encrypt.Key.fromUtf8(aesKeyStr);
@@ -34,7 +38,6 @@ class _BLEDoorSecureScreenState extends BLEDoorBaseState<BLEDoorSecureScreen> {
     return encrypted.base64; 
   }
 
-  // ================= HELPER: AES DECRYPTION =================
   String decryptAES(String encryptedBase64) {
     try {
       final key = encrypt.Key.fromUtf8(aesKeyStr);
@@ -49,63 +52,11 @@ class _BLEDoorSecureScreenState extends BLEDoorBaseState<BLEDoorSecureScreen> {
   }
 
   // ================= HELPER: HMAC CALCULATION =================
-  String computeHmac(String pin, String nonce) {
+  String computeHmac(String pin) {
     final key = utf8.encode(sharedSecret);
-    final bytes = utf8.encode(pin + nonce);
+    final bytes = utf8.encode(pin);
     final hmac = Hmac(sha256, key);
     return hmac.convert(bytes).toString();
-  }
-
-  // ================= OVERRIDE: SCANNING (BROAD SCAN - FIXES VISIBILITY) =================
-  @override
-  Future<void> scanAndConnect() async {
-    setState(() {
-      status = "Scanning (Secure)...";
-      isConnecting = true;
-      doorOpened = false;
-      currentNonce = null;
-      connectingNow = false;
-    });
-
-    pulseController.repeat(reverse: true);
-    
-    // Ensure permissions
-    await [
-      Permission.bluetoothScan,
-      Permission.bluetoothConnect,
-      Permission.location,
-    ].request();
-
-    // Stop any previous scan
-    await FlutterBluePlus.stopScan(); 
-    await scanSub?.cancel();
-
-    // Listen to results
-    scanSub = FlutterBluePlus.onScanResults.listen((results) async {
-      if (connectingNow) return;
-
-      for (final r in results) {
-        // MANUAL FILTER (Exactly like Insecure Mode)
-        // This ensures the device is found even if OS filtering fails
-        final hasUUID = r.advertisementData.serviceUuids
-            .any((u) => u.str128.toLowerCase() == BLEDoorBaseState.serviceUuid);
-
-        if (hasUUID) {
-          connectingNow = true;
-          await FlutterBluePlus.stopScan();
-          
-          setState(() => status = "Found ${r.device.platformName}. Connecting...");
-          await connectToDevice(r.device);
-          return;
-        }
-      }
-    });
-
-    // START BROAD SCAN (No Filters = Better Visibility)
-    await FlutterBluePlus.startScan(
-      timeout: const Duration(seconds: 15),
-      androidScanMode: AndroidScanMode.lowLatency, 
-    );
   }
 
   // ================= OVERRIDE: CONNECTION LOGIC =================
@@ -136,13 +87,15 @@ class _BLEDoorSecureScreenState extends BLEDoorBaseState<BLEDoorSecureScreen> {
 
   Future<void> _secureDiscoverServices() async {
     final services = await device!.discoverServices();
-
+    print("Discovered ${services.length} services.");
     for (final s in services) {
       if (s.uuid.str128.toLowerCase() == BLEDoorBaseState.serviceUuid) {
         for (final c in s.characteristics) {
            final uuid = c.uuid.str128.toLowerCase();
-           if (uuid.contains("6e400002")) rxChar = c;
-           if (uuid.contains("6e400003")) txChar = c;
+           if (uuid ==
+              "6e400002-b5a3-f393-e0a9-e50e24dcca9e") rxChar = c;
+          if (uuid ==
+              "6e400003-b5a3-f393-e0a9-e50e24dcca9e") txChar = c;
         }
       }
     }
@@ -159,60 +112,74 @@ class _BLEDoorSecureScreenState extends BLEDoorBaseState<BLEDoorSecureScreen> {
       print("Raw Received from ESP: $msg");
 
       setState(() {
-        if (msg == "OK") {
+        final separatorIndex = msg.indexOf(':');
+        if (separatorIndex == -1) {
+          status = "Security Error: Invalid message format";
+          return;
+        }
+        String clientSignature = msg.substring(0, separatorIndex);
+        String ciphertext = msg.substring(separatorIndex + 1);
+
+        if (clientSignature != computeHmac(ciphertext)) {
+          status = "Security Error: Invalid HMAC";
+          return;
+        }
+        final decryptedtmsg= decryptAES(ciphertext);
+        if (decryptedtmsg == "OK") {
           status = "UNLOCKED!";
           doorOpened = true;
           isConnecting = false;
           pulseController.stop();
-        } else if (msg == "WRONG") {
+        } else if (decryptedtmsg == "WRONG") {
           status = "Access Denied";
           doorOpened = false;
           isConnecting = false;
-        } else {
-          // Decrypt Nonce
-          print("Decrypting incoming nonce...");
-          //final decryptedNonce = decryptAES(msg);
-          
-        //  if (decryptedNonce.isNotEmpty) {
-         //   currentNonce = decryptedNonce;
-          if (msg.isNotEmpty) {
-            currentNonce = msg;
+        } else if (decryptedtmsg == "PENDING") {
+          status = "Waiting for server replay...";
+        } else if (decryptedtmsg.isNotEmpty && decryptedtmsg.contains("NONCE-")) {
+            currentNonce = decryptedtmsg.substring(6); // Remove "NONCE-" prefix
             status = "Secure Channel Active.\nEnter PIN.";
             print("Decrypted Nonce: $currentNonce");
             isConnecting = false;
-
             pulseController.stop();
-          } else {
+        } else {
             status = "Security Error: Decryption failed";
-          }
         }
       });
     });
 
     print("Sending HELLO to start handshake...");
-    await rxChar!.write(utf8.encode("HELLO"));
+    await sendSecurePacket("HELLO");
     setState(() => status = "Handshaking...");
   }
+
+  Future<void> sendSecurePacket(String s) async {   
+    // 1. Encrypt HMAC
+    final encryptedPayload = encryptAES(s);
+    // 2. Compute HMAC
+    final hmacValue = computeHmac(encryptedPayload);
+    // 3. Send
+    await rxChar!.write(utf8.encode(hmacValue+":"+ encryptedPayload));
+  }
+  
 
   @override
   Future<void> sendPIN() async {
     if (currentNonce == null) {
       setState(() => status = "Session Expired. Reconnecting...");
-      await rxChar!.write(utf8.encode("HELLO"));
+      await sendSecurePacket("HELLO");
       return;
     }
 
     final pin = pinController.text.trim();
     if (pin.length != 4) return;
-
-    // 1. Compute HMAC
-    final hmacValue = computeHmac(pin, currentNonce!);
-    
-    // 2. Encrypt HMAC
-    final encryptedPayload = encryptAES(hmacValue);
-
-    // 3. Send
-    await rxChar!.write(utf8.encode(encryptedPayload));
+    final Map<String, dynamic> payloadMap = {
+      'otp': pin,
+      'user_id': FirebaseAuth.instance.currentUser!.email,
+      'nonce': currentNonce,
+    };
+    final String jsonPayload = jsonEncode(payloadMap);
+    await sendSecurePacket(jsonPayload);
 
     setState(() {
       status = "Verifying...";

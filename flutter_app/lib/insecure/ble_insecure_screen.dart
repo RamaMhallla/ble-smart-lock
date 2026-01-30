@@ -54,7 +54,7 @@ class BLEDoorBaseState<T extends StatefulWidget> extends State<T>
   }
 
   // ================= PERMISSIONS =================
-  Future<void> _ensurePermissions() async {
+  Future<void> ensurePermissions() async {
     await Permission.bluetoothScan.request();
     await Permission.bluetoothConnect.request();
     await Permission.location.request();
@@ -77,8 +77,9 @@ class BLEDoorBaseState<T extends StatefulWidget> extends State<T>
     });
 
     pulseController.repeat(reverse: true);
+    
 
-    await _ensurePermissions();
+    await ensurePermissions();
 
     await FlutterBluePlus.stopScan();
     await scanSub?.cancel();

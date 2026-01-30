@@ -11,6 +11,8 @@
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include "mbedtls/md.h"
+#include <mbedtls/aes.h>
+#include <mbedtls/base64.h>
 #include <time.h>
 
 // ===================== TIME =====================
@@ -21,6 +23,8 @@ const int   DAYLIGHT_OFFSET_SEC = 0;
 // ===================== SECURITY =====================
 const char* SHARED_SECRET = "SUPER_SECRET_KEY";
 const char* CORRECT_PIN   = "1234";
+const char* AES_KEY = "1234567890123456"; 
+const char* AES_IV  = "abcdefghijklmnop";
 
 // ===================== CERTIFICATES =================
 // Keep your existing certificates exactly as they are
@@ -119,7 +123,6 @@ const int   MQTT_PORT   = 8883;
 const char* TOPIC_REQUEST = "door_access/request";
 const char* TOPIC_RESULT  = "door_access/result";
 const char* DEVICE_ID     = "GARAGE01";
-const char* USER_ID       = "mobile_user_01";
 
 // ===================== BLE UUIDs =====================
 #define SERVICE_UUID           "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
@@ -140,7 +143,102 @@ String currentNonce = "";
 String generateNonce() {
   return String((uint32_t)esp_random(), HEX);
 }
+String decryptAES(String encryptedBase64) {
+  // 1. Decode Base64 to raw bytes
+  size_t outputLength;
+  unsigned char encryptedBytes[256]; // Ensure this is large enough for your max message
+  
+  int ret = mbedtls_base64_decode(encryptedBytes, sizeof(encryptedBytes), &outputLength, 
+                        (const unsigned char*)encryptedBase64.c_str(), encryptedBase64.length());
 
+  if (ret != 0) {
+    Serial.println("Base64 Decode Failed");
+    return "";
+  }
+
+  // 2. Prepare AES
+  mbedtls_aes_context aes;
+  mbedtls_aes_init(&aes);
+  // Ensure AES_KEY is cast correctly to const unsigned char*
+  mbedtls_aes_setkey_dec(&aes, (const unsigned char*)AES_KEY, 128);
+
+  // 3. Decrypt (CBC Mode)
+  unsigned char decryptedBytes[256];
+  unsigned char iv[16];
+  memcpy(iv, AES_IV, 16); // Important: Keep original IV clean
+
+  // Note: 'outputLength' from base64 decode MUST be a multiple of 16 for AES
+  mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_DECRYPT, outputLength, iv, encryptedBytes, decryptedBytes);
+  mbedtls_aes_free(&aes);
+
+  // 4. Remove PKCS7 Padding (The Logic Fix)
+  // In PKCS7, the last byte tells us exactly how many bytes are padding.
+  // Example: If 4 bytes of padding are needed, they are [0x04, 0x04, 0x04, 0x04]
+  
+  int padValue = (int)decryptedBytes[outputLength - 1];
+
+  // Sanity check: Padding must be between 1 and 16 for AES-128
+  if (padValue < 1 || padValue > 16) {
+    Serial.println("Invalid Padding Value!");
+    return ""; // Decryption failed or wrong key
+  }
+
+  // Calculate actual data length
+  int plainTextLength = outputLength - padValue;
+
+  // 5. Build String
+  String decrypted = "";
+  for (int i = 0; i < plainTextLength; i++) {
+    decrypted += (char)decryptedBytes[i];
+  }
+
+  return decrypted;
+}
+String encryptAES(String plainText) {
+  // 1. Init AES
+  mbedtls_aes_context aes;
+  mbedtls_aes_init(&aes);
+  mbedtls_aes_setkey_enc(&aes, (const unsigned char*)AES_KEY, 128);
+
+  // 2. Calculate PKCS7 Padding
+  // AES requires data to be in blocks of 16 bytes.
+  int inputLen = plainText.length();
+  int remainder = inputLen % 16;
+  int padding = 16 - remainder; // Value between 1 and 16
+  int totalLen = inputLen + padding;
+
+  // Create a buffer for the padded message
+  unsigned char inputBuffer[totalLen];
+  // Copy original text
+  memcpy(inputBuffer, plainText.c_str(), inputLen);
+  // Add padding bytes (e.g., if we need 4 bytes, add 0x04 four times)
+  for (int i = inputLen; i < totalLen; i++) {
+    inputBuffer[i] = (unsigned char)padding;
+  }
+
+  // 3. Encrypt (CBC Mode)
+  unsigned char outputBuffer[totalLen];
+  unsigned char iv[16];
+  memcpy(iv, AES_IV, 16); // Use a fresh copy of IV (lib modifies it)
+
+  // Encrypt block by block
+  for (int i = 0; i < totalLen; i += 16) {
+    mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_ENCRYPT, 16, iv, inputBuffer + i, outputBuffer + i);
+  }
+  
+  mbedtls_aes_free(&aes);
+
+  // 4. Encode to Base64
+  // We need to calculate the output size for Base64 first
+  size_t base64Len = 0;
+  mbedtls_base64_encode(NULL, 0, &base64Len, outputBuffer, totalLen);
+  
+  unsigned char base64Buffer[base64Len + 1];
+  mbedtls_base64_encode(base64Buffer, base64Len + 1, &base64Len, outputBuffer, totalLen);
+  base64Buffer[base64Len] = '\0'; // Null terminate string
+
+  return String((char*)base64Buffer);
+}
 String computeHMAC(const String& msg) {
   byte hmacResult[32];
   mbedtls_md_context_t ctx;
@@ -195,40 +293,75 @@ void ensureMQTT() {
   }
 }
 
-void publishAccessRequest(const String& hmac) {
+void publishAccessRequest(const String& msg) {
   if (!mqttClient.connected()) {
     ensureMQTT();
   }
   StaticJsonDocument<256> doc;
   doc["device_id"] = DEVICE_ID;
-  doc["user_id"]   = USER_ID;
   doc["event"]     = "door_access/request";
-  doc["otp"]       = hmac;
+  doc["data"]       = msg;
   doc["method"]    = "BLE";
   doc["timestamp"] = getISOTimestamp();
 
-  char buffer[256];
-  serializeJson(doc, buffer);
+  String jsonString;
+  serializeJson(doc, jsonString);
+  String securePayload = createSecurePacket(jsonString);
 
-  Serial.println("Send MQTTS -> " + String(buffer));
-  mqttClient.publish(TOPIC_REQUEST, buffer);
+  Serial.println("Send MQTTS -> " + securePayload);
+  mqttClient.publish(TOPIC_REQUEST, securePayload.c_str());
+}
+
+String createSecurePacket(String plainText) {
+    String ciphertext = encryptAES(plainText);  
+    String signature = computeHMAC(ciphertext); 
+    return signature + ":" + ciphertext;
 }
 
 // ===================== MQTT CALLBACK =================
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   if (String(topic) != TOPIC_RESULT) return;
-  String msg;
-  for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
-  
-  Serial.println("MQTT IN -> " + msg);
-  StaticJsonDocument<256> doc;
-  if (deserializeJson(doc, msg)) return;
+  String raw_msg;
+  for (unsigned int i = 0; i < length; i++) raw_msg += (char)payload[i];
+  raw_msg.trim();
+  StaticJsonDocument<256> doc1;
 
-  const char* decision = doc["decision"];
-  if (decision && String(decision) == "ALLOW") {
-    notifyBLE("OK");
+  if (deserializeJson(doc1, raw_msg)) {
+    notifyBLE(createSecurePacket("WRONG"));
+    return;
+  }
+
+  String msg=doc1["response"];
+  Serial.println("MQTT IN -> " + msg);
+  int separatorIndex = msg.indexOf(':');
+  if (separatorIndex == -1) {
+        notifyBLE(createSecurePacket("ERROR_FORMAT"));
+        return;
+  }
+  String clientSignature = msg.substring(0, separatorIndex);
+  String ciphertext      = msg.substring(separatorIndex + 1);
+  String expectedSignature = computeHMAC(ciphertext);
+
+  if (!clientSignature.equals(expectedSignature)) {
+        Serial.println("Security Alert: Packet Tampered!");
+        notifyBLE(createSecurePacket("WRONG")); // Reject immediately. Do NOT decrypt.
+        return;
+  }
+  String packet=decryptAES(ciphertext);
+
+  StaticJsonDocument<256> doc2;
+  if (deserializeJson(doc2, packet)) {
+    notifyBLE(createSecurePacket("WRONG"));
+    return;
+  }
+
+  bool decision = doc2["authorized"];
+  String reason= doc2["reason"];
+  Serial.println("raeson: "+reason);
+  if (decision) {
+    notifyBLE(createSecurePacket("OK"));
   } else {
-    notifyBLE("WRONG");
+    notifyBLE(createSecurePacket("WRONG"));
   }
 }
 
@@ -242,24 +375,40 @@ class MyRXCallbacks : public NimBLECharacteristicCallbacks {
     received.trim();
 
     Serial.println("BLE RX -> " + received);
+    int separatorIndex = received.indexOf(':');
+    if (separatorIndex == -1) {
+        notifyBLE(createSecurePacket("ERROR_FORMAT"));
+        return;
+    }
+    String clientSignature = received.substring(0, separatorIndex);
+    String ciphertext      = received.substring(separatorIndex + 1);
+    String expectedSignature = computeHMAC(ciphertext);
 
-    if (currentNonce == "") {
+    if (!clientSignature.equals(expectedSignature)) {
+        Serial.println("Security Alert: Packet Tampered!");
+        notifyBLE(createSecurePacket("WRONG")); // Reject immediately. Do NOT decrypt.
+        return;
+    }
+
+    if (ciphertext == encryptAES("HELLO")) {
       currentNonce = generateNonce();
-      notifyBLE(currentNonce);
+      String packet=createSecurePacket("NONCE-"+currentNonce);
+      notifyBLE(packet);
       return;
     }
 
-    //String expected = computeHMAC(String(CORRECT_PIN) + currentNonce);
 
-    if (received.equalsIgnoreCase(CORRECT_PIN)) {
-      notifyBLE("PENDING");
-      Serial.println("Send to mqqts");
-      publishAccessRequest(received);
-    } else {
-      notifyBLE("WRONG");
-    }
-    currentNonce = "";
+    notifyBLE(createSecurePacket("PENDING"));
+    Serial.println("Send to mqqts");
+    publishAccessRequest(received);
+    currentNonce="";
+
   }
+  String createSecurePacket(String plainText) {
+    String ciphertext = encryptAES(plainText);  
+    String signature = computeHMAC(ciphertext); 
+    return signature + ":" + ciphertext;
+}
 };
 class MyServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) override {
@@ -291,6 +440,7 @@ void setup() {
   espClient.setPrivateKey(client_key);
 
   mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
+  mqttClient.setBufferSize(1024);
   mqttClient.setCallback(mqttCallback);
 
   // 3. BLE Init

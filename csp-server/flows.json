@@ -8,67 +8,162 @@
         "env": []
     },
     {
-        "id": "8e8e3661cfe4a972",
-        "type": "mqtt-broker",
+        "id": "48542cab34a0c8b5",
+        "type": "debug",
+        "z": "58d411023043f039",
+        "name": "debug 2",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "false",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 680,
+        "y": 380,
+        "wires": []
+    },
+    {
+        "id": "770aae3714c9455f",
+        "type": "debug",
+        "z": "58d411023043f039",
+        "name": "debug 1",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 330,
+        "y": 300,
+        "wires": []
+    },
+    {
+        "id": "f1a6306d5e07e6f5",
+        "type": "mqtt out",
+        "z": "58d411023043f039",
         "name": "",
-        "broker": "mosquitto",
-        "port": "1883",
-        "clientid": "",
-        "autoConnect": true,
-        "usetls": false,
-        "protocolVersion": "4",
-        "keepalive": "60",
-        "cleansession": true,
-        "autoUnsubscribe": true,
-        "birthTopic": "",
-        "birthQos": "0",
-        "birthPayload": "",
-        "birthMsg": {},
-        "closeTopic": "",
-        "closePayload": "",
-        "closeMsg": {},
-        "willTopic": "",
-        "willQos": "0",
-        "willPayload": "",
-        "willMsg": {},
+        "topic": "door_access/result",
+        "qos": "2",
+        "retain": "false",
+        "respTopic": "",
+        "contentType": "",
         "userProps": "",
-        "sessionExpiry": ""
+        "correl": "",
+        "expiry": "",
+        "broker": "14db66e82257d580",
+        "x": 730,
+        "y": 440,
+        "wires": []
     },
     {
-        "id": "8c11095f4e36bc1c",
-        "type": "tls-config",
+        "id": "7687ce78fdf5302a",
+        "type": "mqtt in",
+        "z": "58d411023043f039",
         "name": "",
-        "cert": "",
-        "key": "",
-        "ca": "",
-        "certname": "",
-        "keyname": "",
-        "caname": "ca.crt",
-        "servername": "csp-server",
-        "verifyservercert": true,
-        "alpnprotocol": ""
+        "topic": "door_access/request",
+        "qos": "0",
+        "datatype": "auto-detect",
+        "broker": "14db66e82257d580",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 110,
+        "y": 400,
+        "wires": [
+            [
+                "770aae3714c9455f",
+                "c0669fb647467f94"
+            ]
+        ]
     },
     {
-        "id": "5dbd07bf65dfbb85",
-        "type": "global-config",
-        "env": [],
-        "modules": {
-            "node-red-contrib-https": "2.0.0"
-        }
+        "id": "c0669fb647467f94",
+        "type": "https-node",
+        "z": "58d411023043f039",
+        "name": "",
+        "method": "POST",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "https://csp-server:5001/validate",
+        "tls": "8c11095f4e36bc1c",
+        "persist": false,
+        "proxy": "",
+        "authType": "",
+        "senderr": false,
+        "x": 190,
+        "y": 560,
+        "wires": [
+            [
+                "d8d5063838f610f0",
+                "7c44a7a1aa09c895"
+            ]
+        ]
     },
     {
-        "id": "a9db4ef1bd7c51ea",
-        "type": "tls-config",
-        "name": "mosquitto",
-        "cert": "",
-        "key": "",
-        "ca": "",
-        "certname": "client.crt",
-        "keyname": "client.key",
-        "caname": "ca.crt",
-        "servername": "mosquitto",
-        "verifyservercert": true,
-        "alpnprotocol": ""
+        "id": "d8d5063838f610f0",
+        "type": "switch",
+        "z": "58d411023043f039",
+        "name": "check error packet",
+        "property": "payload.response",
+        "propertyType": "msg",
+        "rules": [
+            {
+                "t": "nnull"
+            },
+            {
+                "t": "else"
+            }
+        ],
+        "checkall": "true",
+        "repair": false,
+        "outputs": 2,
+        "x": 470,
+        "y": 520,
+        "wires": [
+            [
+                "f1a6306d5e07e6f5",
+                "48542cab34a0c8b5"
+            ],
+            [
+                "a3cfcc39149bf4a1"
+            ]
+        ]
+    },
+    {
+        "id": "a3cfcc39149bf4a1",
+        "type": "debug",
+        "z": "58d411023043f039",
+        "name": "debug 3",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "false",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 740,
+        "y": 600,
+        "wires": []
+    },
+    {
+        "id": "7c44a7a1aa09c895",
+        "type": "debug",
+        "z": "58d411023043f039",
+        "name": "debug 4",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "false",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 390,
+        "y": 660,
+        "wires": []
     },
     {
         "id": "14db66e82257d580",
@@ -103,99 +198,39 @@
         "sessionExpiry": ""
     },
     {
-        "id": "48542cab34a0c8b5",
-        "type": "debug",
-        "z": "58d411023043f039",
-        "name": "debug 2",
-        "active": true,
-        "tosidebar": true,
-        "console": false,
-        "tostatus": false,
-        "complete": "false",
-        "statusVal": "",
-        "statusType": "auto",
-        "x": 520,
-        "y": 340,
-        "wires": []
-    },
-    {
-        "id": "770aae3714c9455f",
-        "type": "debug",
-        "z": "58d411023043f039",
-        "name": "debug 1",
-        "active": true,
-        "tosidebar": true,
-        "console": false,
-        "tostatus": false,
-        "complete": "payload",
-        "targetType": "msg",
-        "statusVal": "",
-        "statusType": "auto",
-        "x": 330,
-        "y": 300,
-        "wires": []
-    },
-    {
-        "id": "f1a6306d5e07e6f5",
-        "type": "mqtt out",
-        "z": "58d411023043f039",
+        "id": "8c11095f4e36bc1c",
+        "type": "tls-config",
         "name": "",
-        "topic": "door_access/result",
-        "qos": "2",
-        "retain": "false",
-        "respTopic": "",
-        "contentType": "",
-        "userProps": "",
-        "correl": "",
-        "expiry": "",
-        "broker": "14db66e82257d580",
-        "x": 550,
-        "y": 440,
-        "wires": []
+        "cert": "",
+        "key": "",
+        "ca": "",
+        "certname": "",
+        "keyname": "",
+        "caname": "ca.crt",
+        "servername": "csp-server",
+        "verifyservercert": true,
+        "alpnprotocol": ""
     },
     {
-        "id": "7687ce78fdf5302a",
-        "type": "mqtt in",
-        "z": "58d411023043f039",
-        "name": "",
-        "topic": "door_access/request",
-        "qos": "2",
-        "datatype": "auto-detect",
-        "broker": "14db66e82257d580",
-        "nl": false,
-        "rap": true,
-        "rh": 0,
-        "inputs": 0,
-        "x": 110,
-        "y": 400,
-        "wires": [
-            [
-                "770aae3714c9455f",
-                "c0669fb647467f94"
-            ]
-        ]
+        "id": "a9db4ef1bd7c51ea",
+        "type": "tls-config",
+        "name": "mosquitto",
+        "cert": "",
+        "key": "",
+        "ca": "",
+        "certname": "client.crt",
+        "keyname": "client.key",
+        "caname": "ca.crt",
+        "servername": "mosquitto",
+        "verifyservercert": true,
+        "alpnprotocol": ""
     },
     {
-        "id": "c0669fb647467f94",
-        "type": "https-node",
-        "z": "58d411023043f039",
-        "name": "",
-        "method": "POST",
-        "ret": "obj",
-        "paytoqs": "ignore",
-        "url": "https://csp-server:5001/validate",
-        "tls": "8c11095f4e36bc1c",
-        "persist": false,
-        "proxy": "",
-        "authType": "",
-        "senderr": false,
-        "x": 330,
-        "y": 440,
-        "wires": [
-            [
-                "f1a6306d5e07e6f5",
-                "48542cab34a0c8b5"
-            ]
-        ]
+        "id": "3c38167dfd5efc5a",
+        "type": "global-config",
+        "env": [],
+        "modules": {
+            "node-red-contrib-https": "2.0.0"
+        }
     }
 ]
