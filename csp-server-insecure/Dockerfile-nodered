@@ -1,0 +1,12 @@
+
+FROM nodered/node-red:latest
+
+# Set the working directory for the Node-RED user
+WORKDIR /usr/src/node-red
+
+# Install your specific node and ensure permissions are correct
+# We use --no-update-notifier to keep the logs clean
+RUN npm install node-red-contrib-https
+
+# Copy your flow and CA certificate
+COPY flowsInsecure.json /data/flows.json

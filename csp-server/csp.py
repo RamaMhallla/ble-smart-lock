@@ -146,6 +146,39 @@ def extract_dataOTP(raw_data: str):
         data = json.loads(decrypted_json_str)
         return data
 
+@app.route('/storegas', methods=['POST'])
+def storegas():
+    raw_data = request.data.decode('utf-8').strip()
+    try:
+        data = extract_dataOTP(raw_data)
+    
+        device_id = data.get('device_id', '')
+
+        if not device_id:
+            log_alert("MISSING_DEVICE_ID", "device_id missing")
+            return jsonify({"error": "Missing device_id"}), 400   
+         # 5. LOG TO INFLUXDB (Accounting)
+        
+        event     = data.get('event', '')
+        gas_level = data.get('gas_level', 0)
+
+
+        if INFLUX_BUCKET:
+            try:
+                point = (
+                    Point("logs")
+                    .tag("device", device_id)
+                    .field("gas_level", gas_level)
+                    .time(datetime.now(timezone.utc))
+                )            
+                write_api.write(bucket=INFLUX_BUCKET, record=point)
+            except Exception as e:
+                print(f"Influx Logging Error: {e}")
+
+        return jsonify({"response": "success", "message": "Gas level stored"}), 200
+    except Exception as e:
+        log_alert("STOREGAS_FAILED", str(e))  
+        return jsonify({"error": f"Store Gas Error: {str(e)}"}), 500
     
 
 @app.route('/validate', methods=['POST'])
@@ -165,7 +198,6 @@ def validate_device():
     device_id = data.get('device_id', '')
     dataOTP   = data.get('data', '')
     event     = data.get('event', '')
-    sensor_data = data.get('sensor_data', {})
 
     try:
         dataInfo = extract_dataOTP(dataOTP)  
@@ -194,11 +226,7 @@ def validate_device():
                 .tag("event", event)
                 .field("authorized", 1 if is_valid else 0)
                 .time(datetime.now(timezone.utc))
-            )
-            for k, v in sensor_data.items():
-                if isinstance(v, (int, float)):
-                    point.field(k, v)
-            
+            )            
             write_api.write(bucket=INFLUX_BUCKET, record=point)
         except Exception as e:
             print(f"Influx Logging Error: {e}")
