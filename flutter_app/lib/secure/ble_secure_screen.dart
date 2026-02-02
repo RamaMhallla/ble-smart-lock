@@ -173,8 +173,9 @@ class _BLEDoorSecureScreenState extends BLEDoorBaseState<BLEDoorSecureScreen> {
 
     final pin = pinController.text.trim();
     if (pin.length != 4) return;
+
     final Map<String, dynamic> payloadMap = {
-      'otp': pin,
+      'otp': computeHmac(pin),
       'user_id': FirebaseAuth.instance.currentUser!.email,
       'nonce': currentNonce,
     };

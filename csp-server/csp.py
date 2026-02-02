@@ -25,6 +25,7 @@ INFLUX_BUCKET = os.getenv("INFLUX_BUCKET")
 AES_KEY_STR = "1234567890123456" # 16 bytes
 AES_IV_STR  = "abcdefghijklmnop" # 16 bytes
 SHARED_SECRET = "SUPER_SECRET_KEY"
+PIN="9fa35e003f51797fddf749cc78a3f602b6a85efb794902e2d3a7496523a1b0a5"
 
 # Convert to bytes for cryptography lib
 AES_KEY_BYTES = AES_KEY_STR.encode('utf-8')
@@ -214,7 +215,7 @@ def validate_device():
         return create_secure_packet(response_payload), 400
 
     # Verify OTP (Simple logic)
-    is_valid = (otp_code == "1234")
+    is_valid = (otp_code == PIN)
     
     # 5. LOG TO INFLUXDB (Accounting)
     if INFLUX_BUCKET:
