@@ -26,7 +26,8 @@ class _BLEDoorSecureScreenState extends BLEDoorBaseState<BLEDoorSecureScreen> {
   static const String aesIvStr  = "abcdefghijklmnop"; 
 
   String? currentNonce;
-
+  @override
+  String get type => "Secure mode";
 
 
   // ================= HELPER: AES ENCRYPTION =================

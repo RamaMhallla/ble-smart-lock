@@ -36,6 +36,8 @@ class BLEDoorBaseState<T extends StatefulWidget> extends State<T>
 
   String status = "Ready";
 
+  String get type => "Insecure mode";
+
   @override
   void initState() {
     super.initState();
@@ -177,7 +179,7 @@ class BLEDoorBaseState<T extends StatefulWidget> extends State<T>
     });
 
     setState(() {
-      status = "Connected. Enter PIN (insecure mode)";
+      status = "Connected. Enter PIN ("+type+")";
         isConnecting = false;
     });
 
@@ -208,7 +210,7 @@ class BLEDoorBaseState<T extends StatefulWidget> extends State<T>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Smart Lock (Insecure Mode)")),
+      appBar: AppBar(title:  Text("Smart Lock ("+type+")")),
       body: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
