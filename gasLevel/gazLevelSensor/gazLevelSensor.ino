@@ -120,6 +120,8 @@ PubSubClient mqttClient(espClient);
 
 #define GAS_PIN 32
 #define THRESHOLD 800 
+int highCount = 0;
+
 
 // ===================== CRYPTO HELPERS (Same as before) =================
 String encryptAES(String plainText) {
@@ -268,20 +270,24 @@ void setup() {
 }
 
 void loop() {
-  // CRITICAL FIX: You must call loop() to keep connection alive!
-  if (!mqttClient.connected()) {
-    ensureMQTT();
-  }
-  mqttClient.loop(); 
+  if (!mqttClient.connected()) ensureMQTT();
+  mqttClient.loop();
 
-  int gasValue = int(random(300,1000));//analogRead(GAS_PIN);
+  // NEW: real MQ sensor reading
+  int gasValue = analogRead(GAS_PIN);
 
+  // NEW: emergency after 3 consecutive readings > THRESHOLD
   if (gasValue > THRESHOLD) {
-    Serial.println("\n!!! GAS LEAK DETECTED !!!");
-    publishEmergency(String(gasValue));
-  }
-  
+    highCount++;
+
+    if (highCount == 3 ) {
+      Serial.println("\n!!! GAS LEAK DETECTED (3 consecutive readings) !!!");
+      publishEmergency(String(gasValue));
+      highCount = 0;
+    }
+  } 
+  // keep periodic sending exactly as before
   publishAccessRequest(String(gasValue));
-  
-  delay(2000); 
+
+  delay(2000);
 }
