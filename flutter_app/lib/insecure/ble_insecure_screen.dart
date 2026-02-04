@@ -36,7 +36,6 @@ class BLEDoorBaseState<T extends StatefulWidget> extends State<T>
 
   String status = "Ready";
 
-  String get type => "Insecure mode";
 
   @override
   void initState() {
@@ -179,7 +178,7 @@ class BLEDoorBaseState<T extends StatefulWidget> extends State<T>
     });
 
     setState(() {
-      status = "Connected. Enter PIN ("+type+")";
+      status = "Connected. Enter PIN";
         isConnecting = false;
     });
 
@@ -210,50 +209,54 @@ class BLEDoorBaseState<T extends StatefulWidget> extends State<T>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title:  Text("Smart Lock ("+type+")")),
-      body: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          children: [
-            Icon(
-              doorOpened ? Icons.lock_open : Icons.lock,
-              size: 90,
-              color: doorOpened ? Colors.green : Colors.blueGrey,
-            ),
-            const SizedBox(height: 20),
-            Text(status, textAlign: TextAlign.center),
-            const SizedBox(height: 30),
-            TextField(
-              controller: pinController,
-              maxLength: 4,
-              obscureText: _isPinObscured,
-              keyboardType: TextInputType.number,
-              decoration: InputDecoration(
-                hintText: "Enter PIN",
-                suffixIcon: IconButton(
-                  icon: Icon(
-                    _isPinObscured
-                        ? Icons.visibility
-                        : Icons.visibility_off,
+      appBar: AppBar(title: const Text("Smart Lock")), // Added const for performance
+      // ✅ FIX: Wrap the body in SingleChildScrollView
+      body: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            // Optional: Align items to the center if you prefer
+            mainAxisAlignment: MainAxisAlignment.center, 
+            children: [
+              Icon(
+                doorOpened ? Icons.lock_open : Icons.lock,
+                size: 90,
+                color: doorOpened ? Colors.green : Colors.blueGrey,
+              ),
+              const SizedBox(height: 20),
+              Text(status, textAlign: TextAlign.center),
+              const SizedBox(height: 30),
+              TextField(
+                controller: pinController,
+                maxLength: 4,
+                obscureText: _isPinObscured,
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  hintText: "Enter PIN",
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _isPinObscured ? Icons.visibility : Icons.visibility_off,
+                    ),
+                    onPressed: () =>
+                        setState(() => _isPinObscured = !_isPinObscured),
                   ),
-                  onPressed: () =>
-                      setState(() => _isPinObscured = !_isPinObscured),
                 ),
               ),
-            ),
-            const SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: _readyToUnlock && _isPinValid ? sendPIN : null,
-              child: const Text("UNLOCK"),
-            ),
-            const SizedBox(height: 20),
-            ElevatedButton.icon(
-              onPressed: isConnecting ? null : scanAndConnect,
-              icon: const Icon(Icons.bluetooth),
-              label:
-                  Text(isConnecting ? "CONNECTING..." : "CONNECT"),
-            ),
-          ],
+              const SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: _readyToUnlock && _isPinValid ? sendPIN : null,
+                child: const Text("UNLOCK"),
+              ),
+              const SizedBox(height: 20),
+              ElevatedButton.icon(
+                onPressed: isConnecting ? null : scanAndConnect,
+                icon: const Icon(Icons.bluetooth),
+                label: Text(isConnecting ? "CONNECTING..." : "CONNECT"),
+              ),
+              // Optional: Add extra padding at the bottom so the button isn't stuck to the keyboard
+              const SizedBox(height: 20), 
+            ],
+          ),
         ),
       ),
     );

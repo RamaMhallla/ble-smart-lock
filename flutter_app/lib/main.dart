@@ -1,6 +1,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter_iot_security/auth/login_screen.dart';
 import 'package:flutter_iot_security/screens/mode_selector_screen.dart';
 import 'firebase_options.dart';
 
@@ -21,7 +22,7 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return const MaterialApp(
       debugShowCheckedModeBanner: false,
-      home: ModeSelectorScreen(), 
+      home: LoginScreen(), 
     );
   }
 }

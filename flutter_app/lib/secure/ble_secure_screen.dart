@@ -26,8 +26,7 @@ class _BLEDoorSecureScreenState extends BLEDoorBaseState<BLEDoorSecureScreen> {
   static const String aesIvStr  = "abcdefghijklmnop"; 
 
   String? currentNonce;
-  @override
-  String get type => "Secure mode";
+
 
 
   // ================= HELPER: AES ENCRYPTION =================
@@ -174,9 +173,10 @@ class _BLEDoorSecureScreenState extends BLEDoorBaseState<BLEDoorSecureScreen> {
 
     final pin = pinController.text.trim();
     if (pin.length != 4) return;
+    String mes=computeHmac(pin);
 
     final Map<String, dynamic> payloadMap = {
-      'otp': computeHmac(pin),
+      'otp': mes,
       'user_id': FirebaseAuth.instance.currentUser!.email,
       'nonce': currentNonce,
     };
