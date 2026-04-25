@@ -1,16 +1,1 @@
-# flutter_iot_security
-
-A new Flutter project.
-
-## Getting Started
-
-This project is a starting point for a Flutter application.
-
-A few resources to get you started if this is your first Flutter project:
-
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Built a Remote Lock System by developing a Flutter app for secure communication over Bluetooth channels, protected with AES encryption and HMAC authentication to an ESP32. The ESP32 connects via MQTTS for cloud-to-device messaging, verifying credentials through a custom Python Flask server. The whole setup was containerized using Docker, and system integrity was thoroughly tested with packet analysis tools like Wireshark, Buttercup, and Nmap to guard against man-in-the-middle and replay attacks.
